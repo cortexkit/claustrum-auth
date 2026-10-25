@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "paths": { "@cortexkit/claustrum-auth-core": ["../core/dist/index.d.ts"] }
+  },
+  "include": ["src"],
+  "exclude": ["test"]
+}

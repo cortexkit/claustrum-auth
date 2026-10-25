@@ -5,3 +5,4 @@
 !.cortexkit/WORKER.md
 node_modules/
 dist/
+target/

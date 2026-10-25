@@ -1,0 +1,89 @@
+# Mutation proofs replayed by the pinned ckdev-mutate runner (cortexkit/commons,
+# crate cortexkit-mutate; the revision is CKDEV_MUTATE_REV in
+# .github/workflows/ci.yml).
+#
+# Each row is one deliberate break of production code or fixture isolation
+# and the named Bun test
+# that must go red for it. The runner first runs each named test on the
+# unmutated tree (it must pass), applies the break, runs the test again (it
+# must fail), and restores the exact bytes. A row earns its place by guarding
+# a silent, costly failure: a credential lost or leaked, a reset credit spent
+# twice, output replayed, a crash that loses an account, a wire contract.
+
+[[control]]
+id = "portability-fence"
+guards = "Plugin paths and permissions cannot silently become POSIX-only"
+file = "scripts/check-portability.mjs"
+old = "  return violations"
+new = "  return [] // NON-VACUITY BREAK: disable the portability fence."
+test_file = "test/scaffold-checks.test.ts"
+runner = "command"
+command = ["bun", "test", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^portability fence rejects nonportable paths and POSIX permissions$']
+
+[[control]]
+id = "runtime-externals"
+guards = "The production bundler must not inline the three shared runtime dependencies"
+file = "scripts/build-options.ts"
+old = "  external: runtimeExternals,"
+new = "  external: [], // NON-VACUITY BREAK: inline shared runtime dependencies."
+test_file = "test/scaffold-checks.test.ts"
+runner = "command"
+command = ["bun", "test", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^production bundler keeps all three runtime dependencies external$']
+
+[[control]]
+id = "external-import-check"
+guards = "An emitted bundle missing a bare runtime import must be refused"
+file = "scripts/check-externals.ts"
+old = "    if (!imports.has(name)) throw new Error(`${name} was not kept external`)"
+new = "    if (false) throw new Error(`${name} was not kept external`) // NON-VACUITY BREAK: ignore bundled dependencies."
+test_file = "test/scaffold-checks.test.ts"
+runner = "command"
+command = ["bun", "test", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^external checker rejects missing bare imports and lazy imports$']
+
+[[control]]
+id = "no-lazy-chunks"
+guards = "Only the declared static entry bundles may be published"
+file = "scripts/check-externals.ts"
+old = "  if (unexpected.length)"
+new = "  if (false /* NON-VACUITY BREAK: permit extra chunks. */)"
+test_file = "test/scaffold-checks.test.ts"
+runner = "command"
+command = ["bun", "test", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^bundle output checker rejects lazy chunks and test entries$']
+
+[[control]]
+id = "package-contents"
+guards = "Tests and the test entry must never ship in npm tarballs"
+file = "scripts/check-package-contents.mjs"
+old = "  if (forbidden.length)"
+new = "  if (false /* NON-VACUITY BREAK: allow tests in tarballs. */)"
+test_file = "test/scaffold-checks.test.ts"
+runner = "command"
+command = ["bun", "test", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^package checker rejects test entries and tests in tarballs$']
+
+[[control]]
+id = "installed-ranges"
+guards = "The build must refuse installed published versions outside manifest ranges"
+file = "scripts/check-installed-ranges.mjs"
+old = "} else if (!Bun.semver.satisfies(version, range)) {"
+new = "} else if (false) { // NON-VACUITY BREAK: accept a drifted installed tree."
+test_file = "test/scaffold-checks.test.ts"
+runner = "command"
+command = ["bun", "test", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "./test/scaffold-checks.test.ts", "-t", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^installed-range checker refuses a mismatched published dependency$']

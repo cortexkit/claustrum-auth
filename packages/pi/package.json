@@ -1,0 +1,45 @@
+{
+  "name": "@cortexkit/pi-claustrum-auth",
+  "version": "0.0.0",
+  "description": "Claustrum vault credentials for Pi",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cortexkit/claustrum-auth.git",
+    "directory": "packages/pi"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "bun ../../scripts/build-package.ts pi && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@cortexkit/common-auth": "^0.26.0",
+    "@cortexkit/claustrum-client": "^0.13.0",
+    "@cortexkit/subc-client": "^0.22.10",
+    "@cortexkit/private-files": "^0.2.1"
+  },
+  "devDependencies": {
+    "@cortexkit/claustrum-auth-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.0.1"
+  }
+}

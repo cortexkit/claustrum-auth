@@ -1,0 +1,28 @@
+{
+  "name": "@cortexkit/claustrum-auth",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun scripts/check-installed-ranges.mjs && bun run --cwd packages/core build && bun run --cwd packages/opencode build && bun run --cwd packages/pi build && bun scripts/check-externals.ts && bun scripts/check-package-contents.mjs",
+    "typecheck": "tsc --noEmit && bun run --filter '*' typecheck",
+    "lint": "biome check . && bun scripts/check-portability.mjs",
+    "test": "bun test",
+    "format": "biome check --write .",
+    "check:ranges": "bun scripts/check-installed-ranges.mjs",
+    "check:externals": "bun scripts/check-externals.ts",
+    "check:packages": "bun scripts/check-package-contents.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "@opencode-ai/plugin": "1.19.3",
+    "@opencode/plugin": "2.0.32",
+    "@types/bun": "1.4.3",
+    "lefthook": "2.2.2",
+    "typescript": "7.0.2",
+    "typescript-api": "npm:@typescript/typescript6@6.0.2"
+  }
+}

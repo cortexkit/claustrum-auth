@@ -1,0 +1,20 @@
+{
+  "name": "@cortexkit/claustrum-auth-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@cortexkit/common-auth": "^0.26.0",
+    "@cortexkit/claustrum-client": "^0.13.0",
+    "@cortexkit/subc-client": "^0.22.10",
+    "@cortexkit/private-files": "^0.2.1"
+  }
+}
