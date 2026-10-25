@@ -1,0 +1,7 @@
+.cortexkit/*
+!.cortexkit/release-notes/
+!.cortexkit/skills/
+!.cortexkit/rules/
+!.cortexkit/WORKER.md
+node_modules/
+dist/
