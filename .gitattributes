@@ -1,0 +1,2 @@
+# Keep LF on every OS, so Biome and the byte checks see the same files on a Windows checkout.
+* text=auto eol=lf
