@@ -35,7 +35,20 @@ export function portabilityViolations(source, filename = 'plugin.ts') {
           report(node, 'resolve home with os.homedir(), not ~')
         if (
           (value.includes('/') || value.includes('\\')) &&
-          !/^https?:\/\//u.test(value) &&
+          !/^(?:https?|wss):\/\//u.test(value) &&
+          !(
+            value === '/' &&
+            ts.isCallExpression(parent) &&
+            ts.isPropertyAccessExpression(parent.expression) &&
+            ((parent.expression.name.text === 'split' &&
+              parent.expression.expression
+                .getText(file)
+                .endsWith('.pathname')) ||
+              (parent.expression.name.text === 'join' &&
+                ts.isBinaryExpression(parent.parent) &&
+                parent.parent.right === parent &&
+                parent.parent.left.getText(file).endsWith('.pathname')))
+          ) &&
           value !== '/claustrum'
         ) {
           report(node, 'build paths with path.join(), not literal separators')

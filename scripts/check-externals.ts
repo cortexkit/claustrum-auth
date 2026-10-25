@@ -17,7 +17,7 @@ const requiredRuntimeExternals = [
   '@cortexkit/private-files',
 ]
 
-export function assertExternalImports(source: string) {
+export function assertImportShape(source: string) {
   const file = ts.createSourceFile(
     'bundle.js',
     source,
@@ -31,17 +31,33 @@ export function assertExternalImports(source: string) {
       node.moduleSpecifier &&
       ts.isStringLiteral(node.moduleSpecifier)
     ) {
+      if (node.moduleSpecifier.text === '@cortexkit/private-files')
+        throw new Error('private-files must load lazily, never statically')
       imports.add(node.moduleSpecifier.text)
     }
     if (
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
-      throw new Error('Lazy imports are forbidden in plugin bundles')
+      const argument = node.arguments[0]
+      // Only @cortexkit/private-files, the Windows backend, loads lazily. Vault clients stay static, and
+      // relative or computed imports could hide unreviewed runtime chunks.
+      if (
+        !argument ||
+        !ts.isStringLiteral(argument) ||
+        argument.text !== '@cortexkit/private-files'
+      )
+        throw new Error('Lazy imports are forbidden except private-files')
+      imports.add(argument.text)
     }
     ts.forEachChild(node, visit)
   }
   visit(file)
+  return imports
+}
+
+export function assertExternalImports(source: string) {
+  const imports = assertImportShape(source)
   for (const name of requiredRuntimeExternals) {
     if (!imports.has(name)) throw new Error(`${name} was not kept external`)
   }
@@ -78,11 +94,13 @@ export async function checkExternalProbe(root = process.cwd()) {
   await writeFile(
     entry,
     requiredRuntimeExternals
+      .filter((name) => name !== '@cortexkit/private-files')
       .map(
         (name, index) =>
           `export * as dependency${index} from ${JSON.stringify(name)};`,
       )
-      .join('\n'),
+      .join('\n') +
+      '\nexport const backend = () => import("@cortexkit/private-files");',
   )
   try {
     const result = await Bun.build({
@@ -111,8 +129,7 @@ export async function checkExternals(root = process.cwd()) {
     assertNoChunks(await readdir(dist), [...entries])
     for (const entry of entries) {
       const source = await readFile(path.join(dist, `${entry}.js`), 'utf8')
-      if (/import\s*\(/u.test(source))
-        throw new Error(`${name}: lazy import in ${entry}`)
+      assertImportShape(source)
     }
   }
   console.log(

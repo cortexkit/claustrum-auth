@@ -3,11 +3,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   assertExternalImports,
+  assertImportShape,
   assertNoChunks,
   checkExternalProbe,
 } from '../scripts/check-externals.ts'
 import { checkInstalledRanges } from '../scripts/check-installed-ranges.mjs'
 import {
+  assertNoFixtureEntries,
   assertPackageContents,
   checkPackageContents,
 } from '../scripts/check-package-contents.mjs'
@@ -49,6 +51,7 @@ test('portability fence rejects nonportable paths and POSIX permissions', () => 
     'const file = base + "/auth.json";',
     `const file = \`\${base}/auth.json\`;`,
     'const file = parts.join("/");',
+    'const file = segments.join("/");',
     'const file = ".config/opencode";',
     'const file = "~";',
     'const file = "~/auth.json";',
@@ -71,6 +74,9 @@ test('portability fence accepts path.join and common-auth imports', () => {
     const file = path.join(os.homedir(), ".config", "opencode", "auth.json");
     const command = "/claustrum";
     const origin = "https://example.com/v1";
+    const handshake = "wss://example.com";
+    const segments = url.pathname.split('/');
+    url.pathname = segments.join('/');
   `
   expect(portabilityViolations(source)).toEqual([])
 })
@@ -87,7 +93,7 @@ test('external checker rejects missing bare imports and lazy imports', () => {
   const source = [
     'export * as vault from "@cortexkit/claustrum-client";',
     'export * as subc from "@cortexkit/subc-client";',
-    'export * as files from "@cortexkit/private-files";',
+    'export const files = () => import("@cortexkit/private-files");',
   ]
   expect(() => assertExternalImports(source.join('\n'))).not.toThrow()
   for (let index = 0; index < source.length; index++) {
@@ -100,6 +106,28 @@ test('external checker rejects missing bare imports and lazy imports', () => {
   expect(() =>
     assertExternalImports(`${source.join('\n')}\nimport("./lazy.js");`),
   ).toThrow('Lazy imports')
+})
+
+test('dynamic import exception allows only the private-files literal', () => {
+  expect(() =>
+    assertImportShape('import("@cortexkit/private-files")'),
+  ).not.toThrow()
+  for (const code of [
+    'import("@cortexkit/claustrum-client")',
+    'import("@cortexkit/subc-client")',
+    'import("other")',
+    'import("./lazy.js")',
+    'import(specifier)',
+  ])
+    expect(() => assertImportShape(code)).toThrow('Lazy imports')
+})
+
+test('private-files static imports and reexports are refused', () => {
+  for (const code of [
+    'import * as files from "@cortexkit/private-files";',
+    'export * from "@cortexkit/private-files";',
+  ])
+    expect(() => assertImportShape(code)).toThrow('never statically')
 })
 
 test('bundle output checker rejects lazy chunks and test entries', () => {
@@ -128,6 +156,13 @@ test('package checker rejects test entries and tests in tarballs', () => {
   }
 })
 
-test('publishable npm tarballs exclude the test entry and tests', () => {
-  checkPackageContents()
+test('package checker rejects fixture code hidden in production bundles', () => {
+  expect(() => assertNoFixtureEntries('const table = []')).not.toThrow()
+  expect(() => assertNoFixtureEntries('const service = "fixture-a"')).toThrow(
+    'Fixture providers',
+  )
+})
+
+test('publishable npm tarballs exclude the test entry and tests', async () => {
+  await checkPackageContents()
 }, 30_000)

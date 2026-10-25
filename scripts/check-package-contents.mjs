@@ -20,7 +20,26 @@ export function assertPackageContents(files, label) {
     throw new Error(`${label}: missing built entry`)
 }
 
-export function checkPackageContents(root = process.cwd()) {
+export function assertNoFixtureEntries(source) {
+  if (/\bfixture-[abc]\b/u.test(source))
+    throw new Error('Fixture providers reached the production build')
+}
+
+export async function checkCoreIsolation(root = process.cwd()) {
+  const build = await Bun.build({
+    entrypoints: [path.join(root, 'packages', 'core', 'src', 'index.ts')],
+    target: 'node',
+    external: ['@cortexkit/common-auth/*'],
+    write: false,
+  })
+  if (!build.success) throw new Error('Core isolation probe did not build')
+  for (const output of build.outputs)
+    assertNoFixtureEntries(await output.text())
+  console.log('Production core build contains no fixture providers.')
+}
+
+export async function checkPackageContents(root = process.cwd()) {
+  await checkCoreIsolation(root)
   for (const name of ['opencode', 'pi']) {
     const cwd = path.join(root, 'packages', name)
     const output = execFileSync(
@@ -40,4 +59,4 @@ export function checkPackageContents(root = process.cwd()) {
   }
 }
 
-if (import.meta.main) checkPackageContents()
+if (import.meta.main) await checkPackageContents()
