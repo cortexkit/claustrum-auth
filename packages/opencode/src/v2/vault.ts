@@ -4,6 +4,7 @@ import {
   createCore,
   type HostFacts,
   opencodeEnrollment,
+  supportedProviders,
 } from '@cortexkit/claustrum-auth-core'
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
 import {
@@ -42,6 +43,7 @@ export function productionDeps(): ServerDeps {
   const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
   const authority = () => enrollmentAuthority(paths, opencodeEnrollment)
   return {
+    table: supportedProviders,
     authority,
     createCore: (facts: HostFacts) =>
       createCore({

@@ -130,6 +130,19 @@ export function fakeHost(
         providerTransforms.add(callback)
         return registration(() => providerTransforms.delete(callback))
       },
+      get: async ({ providerID }: { providerID: string }) => {
+        const record = catalog.find((entry) => entry.id === providerID)
+        if (!record) throw new Error(`Provider not found: ${providerID}`)
+        return {
+          location: {},
+          data: {
+            id: record.id,
+            ...(record.integrationID
+              ? { integrationID: record.integrationID }
+              : {}),
+          },
+        }
+      },
       list: async () => {
         const editor = {
           list: () =>
@@ -183,6 +196,7 @@ export async function startServer(
     catalog?: readonly { id: string; integrationID?: string }[]
     offline?: boolean
     mode?: 'vault' | 'local'
+    table?: readonly ProviderEntry[]
   } = {},
 ) {
   const scratch = path.join(
@@ -250,6 +264,7 @@ export async function startServer(
   )
   const errors: unknown[] = []
   const deps: ServerDeps = {
+    table: options.table ?? table,
     authority: async () => vault.mode,
     createCore: (facts) =>
       createTestCore(
@@ -264,7 +279,7 @@ export async function startServer(
             return client
           },
         },
-        table,
+        options.table ?? table,
       ),
     onError: (error) => errors.push(error),
   }

@@ -2,11 +2,10 @@ import {
   type HostFacts,
   type ProviderEntry,
   pluginId,
+  reservedProviders,
+  type ServingConsumer,
 } from '@cortexkit/claustrum-auth-core'
-import type {
-  ClaustrumConsumer,
-  ClaustrumDiscoveryHub,
-} from '@cortexkit/common-auth/claustrum'
+import type { ClaustrumDiscoveryHub } from '@cortexkit/common-auth/claustrum'
 import {
   installOpenCode2Auth,
   type OpenCode2AuthInstallation,
@@ -28,11 +27,13 @@ export const vaultMethodLabel = 'Claustrum vault (claustrum-auth plugin)'
 /** What the entry builds once the host's catalog is known. */
 export interface ServerCore {
   hub: Pick<ClaustrumDiscoveryHub, 'start' | 'refresh' | 'dispose'>
-  consumers: ReadonlyMap<string, ClaustrumConsumer>
+  consumers: ReadonlyMap<string, ServingConsumer>
   entries: readonly ProviderEntry[]
 }
 
 export interface ServerDeps {
+  /** The supported-provider table this build serves from. */
+  table: readonly ProviderEntry[]
   /** Builds the hub and its members for the providers this host knows. */
   createCore(facts: HostFacts): ServerCore
   /** This host's account mode, read fresh from the enrollment files. */
@@ -53,42 +54,51 @@ export type SetupContext = Pick<
 >
 
 /**
- * Records which providers the host's catalog holds and under which
- * integration, through the provider transform, without changing anything.
- * Reading the catalog once makes the host run every registered transform,
- * this one included.
+ * Which of `ids` the host's catalog holds, and under which integration. The
+ * host's provider lookup reads the whole catalog, inactive providers
+ * included, after every plugin's and the configuration's transforms.
  */
-async function hostFacts(ctx: SetupContext) {
-  const seen = new Map<string, string>()
-  const registration = await ctx.provider.transform((editor) => {
-    seen.clear()
-    for (const record of editor.list())
-      seen.set(
-        record.provider.id,
-        record.provider.integrationID ?? record.provider.id,
-      )
-  })
-  await ctx.provider.list()
-  const facts: HostFacts = {
-    host: 'opencode2',
-    catalog: [...seen.keys()].sort(),
-    integrations: Object.fromEntries(seen),
+async function catalogFacts(
+  ctx: SetupContext,
+  ids: readonly string[],
+): Promise<HostFacts> {
+  const integrations: Record<string, string> = {}
+  for (const id of ids) {
+    let info: { id?: string; integrationID?: string } | undefined
+    try {
+      const found = (await ctx.provider.get({ providerID: id })) as unknown as {
+        data?: typeof info
+      } & typeof info
+      info = found?.data ?? found
+    } catch {
+      continue
+    }
+    if (info?.id === id) integrations[id] = info.integrationID ?? id
   }
-  return { facts, registration }
+  return {
+    host: 'opencode2',
+    catalog: Object.keys(integrations).sort(),
+    integrations,
+  }
 }
 
 /**
- * Sets the OpenCode 2 entry up: at start, every supported provider the host's
- * catalog knows gets the vault login method and a gated installation, whether
- * or not the vault answers now, so the user can activate it once the vault
- * is reachable without a restart.
+ * Sets the OpenCode 2 entry up. At start, every supported provider of the
+ * table gets the vault login method and a gated installation, whether or not
+ * the vault answers now, so the user can activate it once the vault is
+ * reachable without a restart.
+ *
+ * The hub is built on first use (an activation or an owned request), not at
+ * start: the host sets plugins up before it has applied the configuration's
+ * providers, and the hub's members and classification depend on which
+ * providers the catalog holds.
  */
 export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
   const now = deps.now ?? Date.now
-  const { facts, registration: catalog } = await hostFacts(ctx)
-  const core = deps.createCore(facts)
+  let closed = false
   const disposers: (() => Promise<void>)[] = []
   const cleanup = async () => {
+    closed = true
     for (const dispose of disposers.splice(0).reverse()) {
       try {
         await dispose()
@@ -97,13 +107,56 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
       }
     }
   }
-  disposers.push(() => core.hub.dispose())
-  disposers.push(() => catalog.dispose())
+  const entries = deps.table.filter((entry) => {
+    const id = entry.hosts.opencode2
+    return id !== undefined && !reservedProviders.some((r) => r === id)
+  })
+  const ids = entries.map((entry) => entry.hosts.opencode2 as string)
+
+  let core: Promise<ServerCore> | undefined
+  const ready = () => {
+    core ??= (async () => {
+      const built = deps.createCore(await catalogFacts(ctx, ids))
+      if (closed) {
+        // Disposed while the catalog was read: nothing may keep running.
+        await built.hub.dispose()
+        throw new Error('claustrum-auth plugin: stopped.')
+      }
+      disposers.push(() => built.hub.dispose())
+      built.hub.start()
+      try {
+        await built.hub.refresh()
+      } catch (error) {
+        deps.onError?.(error)
+      }
+      return built
+    })()
+    return core
+  }
+  const consumerOf = async (provider: string) =>
+    (await ready()).consumers.get(provider)
+
+  // OpenCode 2 activation: the host's login picker calls this, and only on
+  // success stores the placeholder that makes later requests the plugin's.
+  // A refusal stores nothing in the host; the message names the fix.
+  async function activate(provider: string) {
+    if ((await deps.authority()) !== 'vault')
+      throw new Error(vaultOffText(provider))
+    const built = await ready()
+    try {
+      await built.hub.refresh()
+    } catch (error) {
+      deps.onError?.(error)
+      throw new Error(unreachableText(provider))
+    }
+    const consumer = built.consumers.get(provider)
+    if (!consumer || consumer.routingRows().length === 0)
+      throw new Error(noAccountText(provider))
+  }
+
   try {
-    for (const entry of core.entries) {
-      const provider = entry.hosts.opencode2
-      const consumer = provider ? core.consumers.get(provider) : undefined
-      if (!provider || !consumer) continue
+    for (const entry of entries) {
+      const provider = entry.hosts.opencode2 as string
       const marks = new Map<string, number>()
       const methods = await registerOpenCode2AuthMethods(ctx, {
         integrationID: provider,
@@ -115,7 +168,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
           method: { id: vaultMethodId, type: 'oauth', label: vaultMethodLabel },
           instructions:
             'No browser sign-in: the claustrum-auth plugin serves this provider from the Claustrum vault.',
-          activate: () => activate(provider, consumer),
+          activate: () => activate(provider),
         },
       })
       disposers.push(() => methods.dispose())
@@ -124,7 +177,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
         createVaultAdapter({
           entry,
           provider,
-          consumer,
+          consumer: () => consumerOf(provider),
           rateLimitMarks: marks,
           now,
           onError: deps.onError,
@@ -150,24 +203,6 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
   } catch (error) {
     await cleanup()
     throw error
-  }
-  core.hub.start()
-  void core.hub.refresh().catch((error) => deps.onError?.(error))
-
-  // OpenCode 2 activation: the host's login picker calls this, and only on
-  // success stores the placeholder that makes later requests the plugin's.
-  async function activate(provider: string, consumer: ClaustrumConsumer) {
-    // A refusal stores nothing in the host; the message names the fix.
-    if ((await deps.authority()) !== 'vault')
-      throw new Error(vaultOffText(provider))
-    try {
-      await core.hub.refresh()
-    } catch (error) {
-      deps.onError?.(error)
-      throw new Error(unreachableText(provider))
-    }
-    if (consumer.routingRows().length === 0)
-      throw new Error(noAccountText(provider))
   }
 
   return async () => {

@@ -25,13 +25,19 @@ import { noAccountText, servingError } from './messages.ts'
  */
 export interface VaultAttempt {
   receipt?: ClaustrumScopedAttempt
+  /** The member that issued `receipt`, the only one that may report it. */
+  consumer?: ServingConsumer
 }
 
 export interface VaultAdapterOptions {
   entry: ProviderEntry
   /** The provider id on OpenCode 2, which is also its integration id. */
   provider: string
-  consumer: ServingConsumer
+  /**
+   * The provider's hub member, once the hub is built; undefined when the
+   * host's catalog does not hold the provider.
+   */
+  consumer: () => Promise<ServingConsumer | undefined>
   /**
    * Accounts a 429 marked, with the time the mark ends. Shared with the
    * installation's `limit` listener, which writes it.
@@ -81,35 +87,46 @@ export function createVaultAdapter(
 ): OpenCode2AuthAdapter<never, VaultAttempt, ChooseAccountResult> {
   const now = options.now ?? Date.now
   const placeholder = placeholderSecret(options.provider)
-  const serving = {
-    entry: options.entry,
-    placeholder,
-    consumer: options.consumer,
-    now,
-    rateLimitMarks: options.rateLimitMarks,
-  }
+  const refuse = (error: unknown) =>
+    servingError(error, options.provider, options.entry.origins)
+  const routes = (
+    consumer: ServingConsumer,
+    tried: ReadonlySet<string>,
+    marks: Map<string, number> | undefined,
+  ) =>
+    orderedRoutes(
+      {
+        entry: options.entry,
+        placeholder,
+        consumer,
+        now,
+        rateLimitMarks: marks,
+      },
+      tried,
+    )
   return {
     providerID: options.provider,
-    chooseAccount(input) {
+    async chooseAccount(input) {
       // A provider whose driver never sends its key in Authorization is
       // refused the same way for every account, before any vault read.
       if (options.entry.class === 'C' || options.entry.class === 'D')
-        throw servingError(
-          new ClaustrumAuthError('placement-refused'),
-          options.provider,
-          options.entry.origins,
-        )
+        throw refuse(new ClaustrumAuthError('placement-refused'))
+      const consumer = await options.consumer()
+      if (!consumer) {
+        if (input.phase === 'retry') return undefined
+        throw new Error(noAccountText(options.provider))
+      }
       // Roster order, skipping accounts a 429 marked. A retry never picks the
       // refused account again: returning nothing keeps the host's decision.
       const tried = new Set(
         input.rerouteFrom ? [input.rerouteFrom.accountId] : [],
       )
-      const next = orderedRoutes(serving, tried)[0]
+      const next = routes(consumer, tried, options.rateLimitMarks)[0]
       if (next !== undefined || input.phase === 'retry') return next
       // A request with every account marked still goes out on the first one:
       // the host has already waited its own retry delay, and the provider's
       // answer, not a stale mark, decides whether the account is still limited.
-      const any = orderedRoutes({ ...serving, rateLimitMarks: undefined })[0]
+      const any = routes(consumer, new Set(), undefined)[0]
       if (any !== undefined) return any
       throw new Error(noAccountText(options.provider))
     },
@@ -118,6 +135,8 @@ export function createVaultAdapter(
     },
     async rewriteRequest({ request, accountId, attempt }) {
       const holder = attempt.data
+      const consumer = await options.consumer()
+      if (!consumer) throw new Error(noAccountText(options.provider))
       // Only the chosen account may serve this attempt, so routing inside the
       // shared callbacks sees that one row and no marks.
       const callbacks = servingCallbacks({
@@ -125,13 +144,10 @@ export function createVaultAdapter(
         placeholder,
         consumer: {
           routingRows: () =>
-            options.consumer
-              .routingRows()
-              .filter((row) => row.id === accountId),
-          authorize: (route, signal) =>
-            options.consumer.authorize(route, signal),
-          send: (...args) => options.consumer.send(...args),
-          reportFailure: (...args) => options.consumer.reportFailure(...args),
+            consumer.routingRows().filter((row) => row.id === accountId),
+          authorize: (route, signal) => consumer.authorize(route, signal),
+          send: (...args) => consumer.send(...args),
+          reportFailure: (...args) => consumer.reportFailure(...args),
         },
         now,
       })
@@ -145,10 +161,13 @@ export function createVaultAdapter(
           request.signal,
         )
       } catch (error) {
-        throw servingError(error, options.provider, options.entry.origins)
+        throw refuse(error)
       }
       if (!served) return undefined
-      if (holder) holder.receipt = served.receipt
+      if (holder) {
+        holder.receipt = served.receipt
+        holder.consumer = consumer
+      }
       try {
         return await rebuild(request, served.url, served.headers)
       } catch (error) {
@@ -174,9 +193,10 @@ export function createVaultAdapter(
       // row of another provider or plugin. Custody drops a kept receipt's
       // 401 without reporting it, since the vault is unreachable then.
       const receipt = attempt.data?.receipt
-      if (outcome.status !== 401 || !receipt) return
+      const consumer = attempt.data?.consumer
+      if (outcome.status !== 401 || !receipt || !consumer) return
       try {
-        await options.consumer.reportFailure(receipt, 401, 'direct')
+        await consumer.reportFailure(receipt, 401, 'direct')
       } catch (error) {
         options.onError?.(redactError(error, [receipt.accessToken]))
       }

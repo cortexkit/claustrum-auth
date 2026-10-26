@@ -7,6 +7,7 @@ import {
   row,
   scope,
   startServer,
+  table,
   trigger,
 } from './fakes.ts'
 
@@ -52,25 +53,40 @@ async function login(host: FakeHost, provider: string) {
   return pending.callback
 }
 
-test('registers the login method and installation for every listed provider at start, even while the vault is down', async () => {
+test('registers the login method and a gated installation for every supported provider at start, even while the vault is down', async () => {
   const { host, vault } = await startServer({
     offline: true,
+    rows: [
+      row('a1'),
+      row('b1', { providerIds: ['fixture-b'] }),
+      row('c1', { providerIds: ['fixture-c'] }),
+    ],
     catalog: [
       { id: 'fixture-a' },
-      { id: 'fixture-b' },
       { id: 'fixture-c', integrationID: 'other-integration' },
       { id: 'openai' },
-      { id: 'unknown-provider' },
+    ],
+    table: [
+      ...table,
+      {
+        ...table[0],
+        service: 'openai',
+        ids: ['openai'],
+        hosts: { opencode2: 'openai' },
+      },
     ],
   })
+  // A reserved provider never gets the method, even when a table names it.
   expect([...host.methods.keys()].sort()).toEqual([
     `fixture-a:${vaultMethodId}`,
     `fixture-b:${vaultMethodId}`,
+    `fixture-c:${vaultMethodId}`,
   ])
-  // One gated installation per listed provider, each scoped to its id.
+  // One gated installation per provider, each scoped to its id.
   expect(
     (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
-  ).toEqual(['fixture-a', 'fixture-b'])
+  ).toEqual(['fixture-a', 'fixture-b', 'fixture-c'])
+  expect(vault.connects).toBe(0)
   // Activation works without a restart once the vault answers.
   await expect(login(host, 'fixture-a')).rejects.toThrow('could not be reached')
   vault.offline = false
@@ -79,6 +95,14 @@ test('registers the login method and installation for every listed provider at s
     access: placeholderSecret('fixture-a'),
     methodID: vaultMethodId,
   })
+  // Rows for a provider the catalog lacks, or whose integration differs,
+  // are refused on this host, so activation finds no account.
+  await expect(login(host, 'fixture-b')).rejects.toThrow(
+    'no vault account for fixture-b',
+  )
+  await expect(login(host, 'fixture-c')).rejects.toThrow(
+    'no vault account for fixture-c',
+  )
 })
 
 test('activation refuses with a fixed message when vault mode is off or the provider has no row', async () => {
