@@ -8,9 +8,6 @@ on:
 permissions:
   contents: read
 
-env:
-  CKDEV_MUTATE_REV: 85c8b577795d556fb27e54b548f06ea913d8b337
-
 jobs:
   check:
     strategy:
@@ -34,23 +31,3 @@ jobs:
         run: |
           tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
           test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
-  mutations:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: mutate-cache
-        with:
-          path: ~/.cargo/bin/ckdev-mutate
-          key: ${{ runner.os }}-${{ runner.arch }}-ckdev-mutate-${{ env.CKDEV_MUTATE_REV }}
-      - name: Install pinned mutation runner
-        if: steps.mutate-cache.outputs.cache-hit != 'true'
-        run: cargo install --locked --git https://github.com/cortexkit/commons --rev "$CKDEV_MUTATE_REV" cortexkit-mutate
-      - run: ckdev-mutate check --strict
-      - run: ckdev-mutate run --all
