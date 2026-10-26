@@ -1,3 +1,5 @@
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import { createCore } from '@cortexkit/claustrum-auth-core'
+import { createPiExtension } from './extension.js'
 
-export default function claustrumAuth(_pi: ExtensionAPI): void {}
+/** The claustrum-auth Pi extension, serving the published provider table. */
+export default createPiExtension({ createCore })

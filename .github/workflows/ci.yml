@@ -31,3 +31,23 @@ jobs:
         run: |
           tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
           test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
+
+  # The Pi extension against the real, pinned Pi CLI (design sections 14.2 and
+  # 14.3, and the Pi spike). Every test isolates PI_CODING_AGENT_DIR, HOME and
+  # USERPROFILE under target/scratch, so the runner's own ~/.pi is never used.
+  pi-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: bun install --frozen-lockfile
+      - run: bun test packages/pi/test
+        env:
+          CLAUSTRUM_AUTH_PI_E2E: '1'
