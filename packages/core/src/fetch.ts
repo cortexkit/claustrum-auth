@@ -103,8 +103,15 @@ export function createFetch(options: FetchOptions): CoreFetch {
     const request = new Request(input, init)
     const signal = request.signal
     signal.throwIfAborted()
-    const template = new Request(request, { body: null })
+    // Read the body before anything else touches it. Under the Fetch standard
+    // (Node's undici) `new Request(request, { body: null })` takes the body
+    // over instead of dropping it, so no request is derived from this one.
     const body = await bufferBody(request)
+    const template = {
+      method: request.method,
+      credentials: request.credentials,
+      cache: request.cache,
+    }
     const tried = new Set<string>()
     const secrets: string[] = []
     let saw429 = false

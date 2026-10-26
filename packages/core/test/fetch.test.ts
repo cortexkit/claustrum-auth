@@ -627,3 +627,47 @@ test('each account is tried at most once even with a zero retry-after', async ()
   expect(await response.text()).toBe('last')
   expect(auth).toEqual(['Bearer secret-a-1', 'Bearer secret-b-1'])
 })
+
+test('the body is buffered without deriving a request that takes it over', async () => {
+  const Native = globalThis.Request
+  // Under the Fetch standard, as Node's undici implements it,
+  // `new Request(request, { body: null })` moves the body of `request` into
+  // the new request instead of dropping it, which locks the original. Bun
+  // drops it instead, so this models the standard for the test.
+  class StandardRequest extends Native {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      super(input, init)
+      if (
+        input instanceof Native &&
+        input.body &&
+        init &&
+        'body' in init &&
+        init.body == null
+      )
+        input.body.getReader()
+    }
+  }
+  globalThis.Request = StandardRequest as typeof Request
+  try {
+    const h = await harness()
+    const bodies: string[] = []
+    const fetch = createFetch({
+      entry: fixtureEntries[0],
+      placeholder,
+      consumer: h.consumer,
+      fetch: async (input) => {
+        bodies.push(await (input as Request).text())
+        return new Response('ok')
+      },
+    })
+    const response = await fetch('https://fixture.invalid/v1', {
+      method: 'POST',
+      headers: bearer,
+      body: '{"prompt":"hi"}',
+    })
+    expect(await response.text()).toBe('ok')
+    expect(bodies).toEqual(['{"prompt":"hi"}'])
+  } finally {
+    globalThis.Request = Native
+  }
+})
