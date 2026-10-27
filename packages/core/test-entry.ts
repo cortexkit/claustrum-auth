@@ -37,67 +37,9 @@ export const fixtureEntries: readonly ProviderEntry[] = [
 
 // Catalog simulations do not enable providers. Real entries must verify bearer
 // placement, origins, redirects and redaction on each host before publication.
+// This is the shipped table plus the services that have no live entry yet.
 export const catalogEntries: readonly ProviderEntry[] = [
-  ...[
-    'cerebras',
-    'cline-pass',
-    'deepseek',
-    'inception',
-    'openrouter',
-    'typesafe',
-    'meta',
-    'opencode-go',
-  ].map(
-    (id): ProviderEntry => ({
-      service: id,
-      ids: [id],
-      hosts: {
-        opencode1: id,
-        opencode2: id,
-        ...(!['cline-pass', 'inception', 'typesafe'].includes(id)
-          ? { pi: id }
-          : {}),
-      },
-      class: 'A',
-      origins: ['https://catalog.invalid'],
-    }),
-  ),
-  {
-    service: 'fireworks',
-    ids: ['fireworks-ai', 'fireworks'],
-    hosts: {
-      opencode1: 'fireworks-ai',
-      opencode2: 'fireworks-ai',
-      pi: 'fireworks',
-    },
-    class: 'A',
-    origins: ['https://api.fireworks.ai'],
-  },
-  {
-    service: 'kimi-coding',
-    ids: ['kimi-for-coding', 'kimi-coding'],
-    hosts: {
-      opencode1: 'kimi-for-coding',
-      opencode2: 'kimi-for-coding',
-      pi: 'kimi-coding',
-    },
-    class: 'A',
-    origins: ['https://api.kimi.com'],
-  },
-  {
-    service: 'xai',
-    ids: ['xai'],
-    hosts: { opencode1: 'xai', pi: 'xai' },
-    class: 'A',
-    origins: ['https://api.x.ai'],
-  },
-  {
-    service: 'opencode-zen',
-    ids: ['opencode'],
-    hosts: { opencode1: 'opencode', pi: 'opencode' },
-    class: 'A',
-    origins: ['https://opencode.ai'],
-  },
+  ...supportedProviders,
   {
     service: 'cloudflare-workers-ai',
     ids: ['cloudflare-workers-ai'],

@@ -29,8 +29,8 @@ the turn's output and the `/claustrum` status line.
 
 3. Check that the vault serves the row you are about to use, and what the
    plugin makes of it, with the menu inside the host (step 1 of each provider
-   below). `docs/providers.md` lists the rows this batch needs and the two rows
-   the vault metadata currently blocks.
+   below). `docs/providers.md` lists the rows each provider needs; rows carry
+   the fleet's provider ids, which the plugin maps to each host's id.
 
 ## OpenCode 2
 
@@ -46,13 +46,20 @@ Command per provider (the method id is `claustrum-auth`):
 | kimi-coding | `opencode auth login kimi-for-coding --method claustrum-auth` |
 | openrouter | `opencode auth login openrouter --method claustrum-auth` |
 | typesafe | `opencode auth login typesafe --method claustrum-auth` |
+| meta | `opencode auth login meta --method claustrum-auth` |
+| opencode-go | `opencode auth login opencode-go --method claustrum-auth` |
+
+xai and opencode-zen are not served on OpenCode 2 (`docs/providers.md`): check
+in step 1 that `/claustrum refusals` lists `oauth:xai` and
+`apikey:opencode-zen` as `not-on-this-host`, and that neither `xai` nor
+`opencode` offers the claustrum-auth login method.
 
 Steps, per provider:
 
 1. Start OpenCode 2. Run `/claustrum status`: the provider appears with its
    state, and `/claustrum refusals` does not list its credential. A refusal
-   there names the fix (`not-on-this-host`, `host-id-missing`,
-   `unsupported-provider`, `unmapped`).
+   there names the fix (`not-on-this-host`, `unsupported-provider`,
+   `unmapped`).
 2. Run the provider's activation command above. **Pass:** the login succeeds
    and stores nothing but the plugin's placeholder.
 3. Start a new session, choose a model of that provider, and send one short
@@ -83,6 +90,10 @@ a slash command, because OpenCode 1 has one auth hook per provider:
 | kimi-coding | `/claustrum use kimi-for-coding` |
 | openrouter | `/claustrum use openrouter` |
 | typesafe | `/claustrum use typesafe` |
+| meta | `/claustrum use meta` |
+| xai | `/claustrum use xai` |
+| opencode-go | `/claustrum use opencode-go` |
+| opencode-zen | `/claustrum use opencode` |
 
 Steps, per provider:
 
@@ -113,6 +124,10 @@ Command per provider (Pi's own ids):
 | fireworks | `/claustrum use fireworks` |
 | kimi-coding | `/claustrum use kimi-coding` |
 | openrouter | `/claustrum use openrouter` |
+| meta | `/claustrum use meta` |
+| xai | `/claustrum use xai` |
+| opencode-go | `/claustrum use opencode-go` |
+| opencode-zen | `/claustrum use opencode` |
 
 typesafe, inception and cline-pass are not listed on Pi: Pi's catalog has no
 inception or cline-pass provider at all, and it registers typesafe with an api
@@ -121,19 +136,48 @@ that does not go through the plugin's fetch (`docs/providers.md`).
 Steps, per provider:
 
 1. Run `/claustrum` and check the provider's state. `/claustrum refusals`
-   should not list its credential; `apikey:fireworks-ai` shows
-   `host-id-missing` here until the row also names `fireworks`.
+   should not list its credential. `apikey:fireworks-ai` (fleet id
+   `fireworks-ai`) is served here as `fireworks`, and `apikey:kimi-for-coding`
+   (fleet id `kimi-code-plan-global`) as `kimi-coding`.
 2. Run the activation command above. **Pass:** Pi asks for consent to move the
    existing login aside (when there is one), you accept, and the provider is
    reported as owned.
 3. Choose a model of that provider and send one short prompt. **Pass:** a
-   normal answer arrives. With fireworks, remember that the owned form hides
-   the provider's `anthropic-messages` models; the count is in
-   `/claustrum`'s provider line.
+   normal answer arrives. The owned form offers only the models of the one
+   bearer api the plugin registers and hides the rest; the count is in
+   `/claustrum`'s provider line. fireworks hides its `anthropic-messages`
+   models; opencode-go offers its `openai-completions` models (pick one, for
+   example `glm-5.3`); opencode-zen offers its `openai-responses` models (for
+   example `gpt-5.4-mini`).
 4. Run `/claustrum` again. **Pass:** the provider line says owned with one
    vault account.
 5. Run `/claustrum release <provider>`. **Pass:** your own Pi login is back and
    a prompt with it answers.
+
+## Batch 2 checks, on every host that lists the provider
+
+Run these on top of the host's steps above:
+
+- **meta**: the first turn is the answer to the open question in
+  `docs/providers.md` ("Meta: the served token's expiry"). **Pass:** the
+  turn answers. If it fails locally with `insufficient-validity` and nothing
+  reaches Meta, the vault served the minted key without an expiry (or with
+  less than five minutes left): record it for CKCRED, it is a vault fix.
+- **xai**: OpenCode 1 and Pi only. **Pass:** a turn answers. On OpenCode 2,
+  **pass** when the row is listed as `not-on-this-host` and no claustrum-auth
+  login method exists for `xai`.
+- **opencode-go**: send one prompt to a bearer model (OpenCode:
+  `glm-5.3` or another OpenAI-shaped model; Pi: a model the owned form
+  offers) and **pass** when it answers. On OpenCode 1 and 2, then pick an
+  Anthropic-shaped model (for example `claude-haiku-5-5`) and **pass** when
+  the request is refused locally with "this model's driver sends its key in
+  `x-api-key`" before anything is sent.
+- **opencode-zen**: OpenCode 1 and Pi only, as opencode-go, with an
+  OpenAI-shaped model for the served turn. On OpenCode 2, **pass** when the
+  row is listed as `not-on-this-host`.
+- **cline-pass** (batch 1, served by credential id): **pass** when
+  `/claustrum refusals` does not list `apikey:cline-pass` and a cline-pass
+  turn answers, with the vault row still carrying no provider id.
 
 ## What "pass" proves, per design 14.4
 

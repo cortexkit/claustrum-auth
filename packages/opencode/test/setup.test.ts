@@ -185,7 +185,7 @@ test('setup explains grants reaching no usable credentials instead of presenting
     },
   )
   expect(h.output()).toContain('The grant reaches no usable credentials')
-  expect(h.output()).toContain('mapped to this host provider id')
+  expect(h.output()).toContain('provider ids this plugin does not serve')
   expect(h.output()).not.toContain('Grant command:')
 })
 

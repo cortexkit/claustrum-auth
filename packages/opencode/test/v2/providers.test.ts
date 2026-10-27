@@ -3,10 +3,10 @@
 // key goes only to the provider's documented origin.
 import { expect, test } from 'bun:test'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
+import { vaultRowFor } from '../../../core/test/fakes.ts'
 import {
   type ProviderEntry,
   supportedProviders,
-  tableByService,
 } from '../../../core/test-entry.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { type FakeHost, row, scope, startServer, trigger } from './fakes.ts'
@@ -53,19 +53,48 @@ test('the published entry registers the shipped providers, and no fixture provid
   expect(expected.some((id) => id.startsWith('fixture-'))).toBe(false)
 })
 
+test('xai and opencode-zen get no login method on OpenCode 2 even when the host knows them', async () => {
+  // OpenCode 2 sends xAI's key in a WebSocket handshake by default, and its
+  // Console plugin reads the stored `opencode` credential outside the request
+  // hooks, so neither is served here although the vault holds both rows.
+  const xai = supportedProviders.find((entry) => entry.service === 'xai')
+  const zen = supportedProviders.find(
+    (entry) => entry.service === 'opencode-zen',
+  )
+  if (!xai || !zen) throw new Error('missing batch 2 entries')
+  const { host } = await startServer({
+    rows: [vaultRowFor(xai), vaultRowFor(zen)],
+    catalog: [
+      ...opencode2Catalog(supportedProviders),
+      { id: 'xai' },
+      { id: 'opencode' },
+    ],
+    table: supportedProviders,
+  })
+  for (const id of ['xai', 'opencode']) {
+    expect(host.methods.has(`${id}:${vaultMethodId}`)).toBe(false)
+    expect(
+      (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
+    ).not.toContain(id)
+  }
+  // Meta and OpenCode Go do register login methods on OpenCode 2.
+  for (const id of ['meta', 'opencode-go'])
+    expect(host.methods.has(`${id}:${vaultMethodId}`)).toBe(true)
+})
+
 test('a live provider is served with its vault key, and a lookalike origin is refused before the read', async () => {
-  for (const service of ['cerebras', 'deepseek', 'openrouter']) {
-    const entry = tableByService.get(service)
-    if (!entry) throw new Error(`no ${service} entry`)
-    const provider = entry.hosts.opencode2 as string
+  for (const entry of supportedProviders) {
+    const provider = entry.hosts.opencode2
+    if (!provider) continue
     const origin = new URL(entry.origins[0] as string)
+    // The operator's row: the fleet id (cline-pass: its exact credential id
+    // and no provider id), which the plugin maps to OpenCode's id.
+    const vaultRow = vaultRowFor(entry, {
+      accountId: `account-${entry.service}`,
+    })
+    const credential = vaultRow.id
     const { host, vault } = await startServer({
-      rows: [
-        row(`apikey:${service}`, {
-          providerIds: [provider],
-          accountId: `account-${service}`,
-        }),
-      ],
+      rows: [vaultRow],
       catalog: opencode2Catalog(supportedProviders),
       table: supportedProviders,
     })
@@ -79,10 +108,11 @@ test('a live provider is served with its vault key, and a lookalike origin is re
       body: '{}',
     })
     const sent = await send(host, provider, request)
-    expect(sent.request.headers.get('authorization')).toBe(
-      `Bearer secret-apikey:${service}-1`,
-    )
-    expect(vault.reads).toEqual([`apikey:${service}`])
+    expect([provider, sent.request.headers.get('authorization')]).toEqual([
+      provider,
+      `Bearer secret-${credential}-1`,
+    ])
+    expect(vault.reads).toEqual([credential])
     for (const lookalike of [
       `${origin.protocol}//${origin.hostname}.example`,
       `${origin.protocol}//${origin.hostname}:8443`,
@@ -100,7 +130,7 @@ test('a live provider is served with its vault key, and a lookalike origin is re
         ),
       ).rejects.toThrow('is only sent to')
     }
-    expect(vault.reads).toEqual([`apikey:${service}`])
+    expect(vault.reads).toEqual([credential])
   }
 })
 

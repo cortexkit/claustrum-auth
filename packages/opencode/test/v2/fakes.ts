@@ -293,7 +293,13 @@ export async function startServer(
           ? vault.served.get(credentialId)
           : vault.rows.find((r) => r.id === credentialId)?.accountId,
         recordVersion: vault.version,
-        expiresAtMs: null,
+        // Custody refuses an OAuth read with no expiry, so an OAuth row is
+        // served with an hour left, as the vault serves a minted token.
+        expiresAtMs:
+          vault.rows.find((r) => r.id === credentialId)?.credentialType ===
+          'oauth'
+            ? Date.now() + 3_600_000
+            : null,
       }
     },
     async reportAuthFailureScoped(input) {

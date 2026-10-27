@@ -4,7 +4,11 @@
 import { appendFileSync } from 'node:fs'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { createTestCore, type ProviderEntry } from '../core/test-entry.ts'
+import {
+  createTestCore,
+  type ProviderEntry,
+  supportedProviders,
+} from '../core/test-entry.ts'
 import { createPiExtension } from './src/extension.ts'
 
 export interface PiTestConfig {
@@ -15,6 +19,12 @@ export interface PiTestConfig {
   syncMs?: number
   /** A file that receives one line per provider registration. */
   registrations?: string
+  /**
+   * Serve the shipped supported-provider table instead of the fixtures, with
+   * the mock's loopback origin added to each entry so a models.json override
+   * can point a live provider at the mock. Every other origin stays refused.
+   */
+  shipped?: boolean
 }
 
 const config = JSON.parse(
@@ -43,6 +53,13 @@ export const piFixtureEntries: readonly ProviderEntry[] = [
   entry('fixture-p'),
   ...Array.from({ length: 9 }, (_, index) => entry(`fixture-n${index + 1}`)),
 ]
+
+// The shipped table as the test build serves it: ids, host mapping and the
+// documented origins unchanged, plus the mock's origin standing in for the
+// provider's API host.
+const shippedEntries: readonly ProviderEntry[] = supportedProviders.map(
+  (shipped) => ({ ...shipped, origins: [...shipped.origins, config.origin] }),
+)
 
 class VaultDown extends Error {
   readonly code = 'ECONNREFUSED'
@@ -76,7 +93,8 @@ const client: ClaustrumScopedClient = {
 }
 
 const extension = createPiExtension({
-  createCore: (options) => createTestCore(options, piFixtureEntries),
+  createCore: (options) =>
+    createTestCore(options, config.shipped ? shippedEntries : piFixtureEntries),
   connect: async () => client,
   syncIntervalMs: config.syncMs ?? 200,
 })

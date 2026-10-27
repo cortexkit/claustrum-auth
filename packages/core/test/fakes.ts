@@ -86,13 +86,19 @@ async function withTable(
   let active = true
   let version = 1
   let outage = false
-  let get: ClaustrumScopedClient['getScoped'] = async ({ credentialId }) => ({
-    credentialId,
-    material: `secret-${credentialId}-${version}`,
-    accountId: rows.find((r) => r.id === credentialId)?.accountId,
-    recordVersion: version,
-    expiresAtMs: null,
-  })
+  let get: ClaustrumScopedClient['getScoped'] = async ({ credentialId }) => {
+    const listed = rows.find((r) => r.id === credentialId)
+    return {
+      credentialId,
+      material: `secret-${credentialId}-${version}`,
+      accountId: listed?.accountId,
+      recordVersion: version,
+      // Custody refuses an OAuth read with no expiry, so an OAuth row is served
+      // with an hour left, as the vault serves a minted token.
+      expiresAtMs:
+        listed?.credentialType === 'oauth' ? Date.now() + 3_600_000 : null,
+    }
+  }
   const client: ClaustrumScopedClient = {
     async listScoped() {
       lists++
@@ -159,3 +165,19 @@ async function withTable(
 
 export const placeholder = 'owned-placeholder'
 export const bearer = { authorization: `Bearer ${placeholder}` }
+
+// The operator's vault row for a shipped entry: the fleet's provider id, or,
+// for an entry served by exact credential id, that credential with no
+// provider id at all. Meta and xAI are OAuth rows in the operator's vault.
+export function vaultRowFor(
+  entry: ProviderEntry,
+  overrides: Partial<ScopedInventoryRow> = {},
+): ScopedInventoryRow {
+  const byCredential = entry.credentialIds?.[0]
+  const oauth = entry.service === 'meta' || entry.service === 'xai'
+  return row(byCredential ?? `${oauth ? 'oauth' : 'apikey'}:${entry.service}`, {
+    providerIds: byCredential ? [] : [entry.ids[0] as string],
+    ...(oauth ? { credentialType: 'oauth', authMethod: 'oauth' } : {}),
+    ...overrides,
+  })
+}

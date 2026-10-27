@@ -200,7 +200,7 @@ export async function runClaustrumSetup(
       }
       if (reach && reach.grants > 0 && !withRows?.size)
         print(
-          'The grant reaches no usable credentials. In the vault, check each credential is enabled, active, mapped to this host provider id and has an allowed auth method; inspect refused rows with the menu.',
+          'The grant reaches no usable credentials. In the vault, check each credential is enabled, active and has an allowed auth method; the menu lists refused rows with the reason, including provider ids this plugin does not serve.',
         )
       const active = withRows?.size
         ? providers.filter((id) => withRows.has(id))

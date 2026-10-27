@@ -7,8 +7,14 @@ export type Host = 'opencode1' | 'opencode2' | 'pi'
 export type ProviderClass = 'A' | 'B' | 'C' | 'D'
 export interface ProviderEntry {
   service: string
+  // The fleet's provider ids for this service: the vocabulary vault rows carry
+  // in `provider_ids`, which fleet routing and pricing also use. They are not
+  // host ids; `hosts` maps the service to each host's own id.
   ids: readonly string[]
   hosts: Partial<Record<Host, string>>
+  // Exact vault credential ids served by this entry when the row carries no
+  // provider id at all. Never a prefix or pattern; see the cline-pass entry.
+  credentialIds?: readonly string[]
   class: ProviderClass
   origins: readonly string[]
   accountPath?: readonly string[]
@@ -22,6 +28,11 @@ export interface HostFacts {
 // Enable a service only after each supported host proves bearer placement,
 // origin and redirect refusal, and error redaction, then sends a real request
 // with an enrolled vault credential (design section 14.4, steps 1-6).
+//
+// A vault row names its service by fleet id (`ids`); the plugin maps that id
+// to the running host's id (`hosts`). The vault owner never retags rows for
+// the plugin, so a fleet id this table does not know is refused as
+// `unsupported-provider` rather than guessed.
 //
 // Origins are the API hosts the provider's own documentation names. A path is
 // never part of an origin, so `https://api.deepseek.com` also covers requests
@@ -41,11 +52,16 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.cerebras.ai'],
   },
   {
-    // Cline's documented base URL is `https://api.cline.bot/api/v1`; the vault
-    // row for it carries no provider id, so the vault cannot map it to this
-    // entry yet (docs/providers.md, "Not served yet").
+    // Cline's documented base URL is `https://api.cline.bot/api/v1`.
+    //
+    // The vault row `apikey:cline-pass` deliberately carries no provider id:
+    // with one, fleet routing picked it and sent fleet workers to it. The row
+    // stays unmapped so fleet routing never picks it, and the plugin serves it
+    // through this exact credential id instead, only while the row has no
+    // provider ids.
     service: 'cline-pass',
     ids: ['cline-pass'],
+    credentialIds: ['apikey:cline-pass'],
     hosts: { opencode1: 'cline-pass', opencode2: 'cline-pass' },
     class: 'A',
     origins: ['https://api.cline.bot'],
@@ -58,10 +74,10 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.deepseek.com'],
   },
   {
-    // OpenCode's id is `fireworks-ai`; Pi's is `fireworks`. Both name one
-    // service, so a vault row may carry both ids (section 4.3).
+    // The fleet id is `fireworks-ai`; OpenCode's id is `fireworks-ai` and
+    // Pi's is `fireworks`.
     service: 'fireworks',
-    ids: ['fireworks-ai', 'fireworks'],
+    ids: ['fireworks-ai'],
     hosts: {
       opencode1: 'fireworks-ai',
       opencode2: 'fireworks-ai',
@@ -78,10 +94,10 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.inceptionlabs.ai'],
   },
   {
-    // The provider's documentation and its credential name say "kimi-code";
-    // OpenCode's id is `kimi-for-coding` and Pi's is `kimi-coding`.
+    // The fleet id is `kimi-code-plan-global`; OpenCode's id is
+    // `kimi-for-coding` and Pi's is `kimi-coding`.
     service: 'kimi-coding',
-    ids: ['kimi-for-coding', 'kimi-coding'],
+    ids: ['kimi-code-plan-global'],
     hosts: {
       opencode1: 'kimi-for-coding',
       opencode2: 'kimi-for-coding',
@@ -111,6 +127,51 @@ export const supportedProviders: readonly ProviderEntry[] = [
     class: 'A',
     origins: ['https://api.typesafe.ai'],
   },
+  {
+    // An OAuth row: the vault serves a minted inference key with an expiry,
+    // which custody requires of every OAuth read (docs/providers.md, "Meta").
+    service: 'meta',
+    ids: ['meta'],
+    hosts: { opencode1: 'meta', opencode2: 'meta', pi: 'meta' },
+    class: 'A',
+    origins: ['https://api.meta.ai'],
+  },
+  {
+    // Not on OpenCode 2: its xAI provider sends the key in a WebSocket
+    // handshake by default, which needs its own proof (design section 7.4).
+    // OpenCode 1 and Pi send xAI requests over HTTP through the plugin's fetch.
+    service: 'xai',
+    ids: ['xai'],
+    hosts: { opencode1: 'xai', pi: 'xai' },
+    class: 'A',
+    origins: ['https://api.x.ai'],
+  },
+  {
+    // Each model picks its own driver. Only models whose driver sends the key
+    // as `Authorization: Bearer` are served; the Anthropic- and Google-shaped
+    // models send it in `x-api-key` or `x-goog-api-key` and are refused per
+    // request (docs/providers.md, "OpenCode Go").
+    service: 'opencode-go',
+    ids: ['opencode-go'],
+    hosts: {
+      opencode1: 'opencode-go',
+      opencode2: 'opencode-go',
+      pi: 'opencode-go',
+    },
+    class: 'A',
+    origins: ['https://opencode.ai'],
+  },
+  {
+    // OpenCode Zen, provider id `opencode`. Not on OpenCode 2, where the
+    // built-in Console plugin reads the stored `opencode` credential outside
+    // the request hooks (design section 5.2, class D). Per-model drivers as
+    // opencode-go.
+    service: 'opencode-zen',
+    ids: ['opencode'],
+    hosts: { opencode1: 'opencode', pi: 'opencode' },
+    class: 'A',
+    origins: ['https://opencode.ai'],
+  },
 ]
 export const reservedProviders = [
   'openai',
@@ -126,7 +187,6 @@ export const refusalCodes = [
   'unsupported-provider',
   'mixed-services',
   'not-on-this-host',
-  'host-id-missing',
   'unknown-to-host',
   'integration-mismatch',
 ] as const
@@ -146,22 +206,38 @@ export function classifyRow(
   )
     return { kind: 'not-mine' }
   if (!row.authMethod) return refused('no-auth-method')
-  if (!row.providerIds.length) return refused('unmapped')
-  if (row.providerIds.some((id) => reservedProviders.some((r) => r === id)))
-    return refused('reserved-provider')
-  const entries = row.providerIds.map((id) =>
-    table.find((entry) => entry.ids.includes(id)),
-  )
-  const entry = entries.find((value) => value !== undefined)
-  if (!entry) return refused('unsupported-provider')
-  if (entries.some((value) => value !== entry)) return refused('mixed-services')
+  const entry = row.providerIds.length
+    ? entryForFleetIds(row.providerIds, table)
+    : table.find((candidate) =>
+        candidate.credentialIds?.includes(row.credentialId),
+      )
+  if (!entry) return refused('unmapped')
+  if (typeof entry === 'string') return refused(entry)
+  // The row names the service by fleet id; the host serves it under its own.
   const provider = entry.hosts[facts.host]
   if (!provider) return refused('not-on-this-host')
-  if (!row.providerIds.includes(provider)) return refused('host-id-missing')
   if (!facts.catalog.includes(provider)) return refused('unknown-to-host')
   if (facts.host === 'opencode2' && facts.integrations?.[provider] !== provider)
     return refused('integration-mismatch')
   return { kind: 'mine', member: provider }
+}
+
+// The one entry every fleet id of a row belongs to, or the refusal that stops
+// it. Ids of two services, or a known id beside an unknown one, would make a
+// 401 ambiguous (design section 4.3), so they are refused, not split.
+function entryForFleetIds(
+  providerIds: readonly string[],
+  table: readonly ProviderEntry[],
+): ProviderEntry | RefusalCode {
+  if (providerIds.some((id) => reservedProviders.some((r) => r === id)))
+    return 'reserved-provider'
+  const entries = providerIds.map((id) =>
+    table.find((entry) => entry.ids.includes(id)),
+  )
+  const entry = entries.find((value) => value !== undefined)
+  if (!entry) return 'unsupported-provider'
+  if (entries.some((value) => value !== entry)) return 'mixed-services'
+  return entry
 }
 
 export function classifyingFamily(
