@@ -307,6 +307,21 @@ class Scenario {
       .map((row) => row.value)
   }
 
+  /**
+   * Waits, within bounds, until the host server's log holds `text`. The host
+   * logs a failed turn's cause while it drains the session, which can come
+   * after the CLI that ran the turn has already printed the error and exited.
+   */
+  async logged(text: string, ms = 10_000) {
+    const shown = () => this.server?.stderr.join('').includes(text) === true
+    const deadline = Date.now() + ms
+    while (!shown() && Date.now() < deadline) await Bun.sleep(100)
+    if (!shown())
+      throw new Error(
+        `the host server's log never showed "${text}" within ${ms} ms`,
+      )
+  }
+
   events(name?: string): PluginEvent[] {
     const all = readFileSync(this.log, 'utf8')
       .split('\n')
@@ -1312,7 +1327,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         .filter((line) => line.includes('"type":"error"'))
         .map((line) => line.slice(0, 400))
       expect(revoked.output).toContain('"type":"error"')
-      expect(run.server?.stderr.join('')).toContain('vault mode is off')
+      await run.logged('vault mode is off')
       expect(mock.records.slice(silent)).toEqual([])
       vault.mode = 'vault'
 
@@ -1349,7 +1364,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         // "Failed to read xai/xai-responses stream"; the plugin's fixed
         // refusal is the cause the host logs.
         expect(refused.output).toContain('"type":"error"')
-        expect(run.server?.stderr.join('')).toContain(
+        await run.logged(
           `the vault key for xai is only sent over WebSocket to ${mock.url.replace(/^http/u, 'ws')}`,
         )
         expect(mock.records.slice(sent)).toEqual([])

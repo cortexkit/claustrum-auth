@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import { vaultMethodId } from '../../src/v2/setup.ts'
+import { phaseClock } from '../phase-clock.ts'
 import {
   type FakeHost,
   origin,
@@ -357,6 +358,21 @@ test('rows vanishing while owned refuse locally and send nothing', async () => {
   // on Windows that takes the access-list path and runs past Bun's 5 s default.
 }, 20_000)
 
+test('a request refused for want of an account says vault mode is off when it is', async () => {
+  // Once vault mode goes off, the hub empties every roster at its next
+  // authority read. Here the roster is emptied first and the mode switched
+  // after, the order a request can meet between two hub ticks.
+  const { host, vault } = await startServer()
+  await login(host, 'fixture-a')
+  vault.rows = []
+  await login(host, 'fixture-b').catch(() => {})
+  vault.mode = 'local'
+  await expect(
+    send(host, 'fixture-a', post(`${origin}/v1`, bearer('fixture-a'))),
+  ).rejects.toThrow('vault mode is off')
+  expect(vault.reads).toEqual([])
+}, 20_000)
+
 // WebSocket handshakes: fixture-a may be sent over a socket to
 // wss://fixture.invalid; the other fixtures have no handshake origin.
 const socketTable = table.map((entry) =>
@@ -466,8 +482,10 @@ test('a handshake to another origin, or for a provider without handshake origins
 })
 
 test('a handshake URL moved after the origin check is refused, and the key never enters the handshake', async () => {
-  const { host, vault } = await startServer({ table: socketTable })
+  const clock = phaseClock('moved handshake URL test')
+  const { host, vault } = await startServer({ table: socketTable, clock })
   await login(host, 'fixture-a')
+  clock.mark('login')
   // Another plugin's hook between the plugin's check and the installer.
   const hooks = host.hooks.get('experimental.ws.handshake') ?? []
   const draft = {
@@ -484,22 +502,28 @@ test('a handshake URL moved after the origin check is refused, and the key never
   await expect(
     trigger(host, 'experimental.ws.handshake', draft),
   ).rejects.toThrow('is only sent over WebSocket to wss://fixture.invalid')
+  clock.mark('refused handshake')
   expect(draft.headers.authorization).toBe(
     `Bearer ${placeholderSecret('fixture-a')}`,
   )
   // The read already happened for the URL that was checked.
   expect(vault.reads).toEqual(['a1'])
+  clock.done()
 })
 
 test('a 429 error frame marks the account and the next handshake goes to the next one; a 401 error frame is reported once', async () => {
+  const clock = phaseClock('error frame test')
   const { host, vault } = await startServer({
     table: socketTable,
     rows: [row('a1'), row('a2')],
+    clock,
   })
   await login(host, 'fixture-a')
+  clock.mark('login')
   vault.version = 5
   const first = scope('fixture-a')
   const opened = await handshake(host, 'fixture-a', socketURL, first)
+  clock.mark('first handshake')
   expect(opened.headers.authorization).toBe('Bearer secret-a1-5')
   await receive(
     host,
@@ -509,6 +533,7 @@ test('a 429 error frame marks the account and the next handshake goes to the nex
   await Bun.sleep(10)
   const second = scope('fixture-a')
   const moved = await handshake(host, 'fixture-a', socketURL, second)
+  clock.mark('429 frame and second handshake')
   expect(moved.headers.authorization).toBe('Bearer secret-a2-5')
   await receive(
     host,
@@ -516,7 +541,9 @@ test('a 429 error frame marks the account and the next handshake goes to the nex
     '{"type":"error","status":401,"error":{"message":"bad key"}}',
   )
   await Bun.sleep(10)
+  clock.mark('401 frame and report')
   expect(vault.reports).toEqual([
     expect.objectContaining({ credentialId: 'a2', recordVersion: 5 }),
   ])
+  clock.done()
 })

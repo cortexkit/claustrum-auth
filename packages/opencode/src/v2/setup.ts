@@ -265,6 +265,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
           onError: deps.onError,
           onRefusal: (code) => latestRefusal.set(provider, code),
           handshakes,
+          authority: deps.authority,
         }),
         {
           gateOnPlaceholder: {

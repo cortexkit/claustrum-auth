@@ -18,7 +18,12 @@ import {
   placeholderSecret,
 } from '@cortexkit/common-auth/opencode2'
 import { redactCredentialFrame } from '@cortexkit/common-auth/redaction'
-import { handshakeOriginText, noAccountText, servingError } from './messages.ts'
+import {
+  handshakeOriginText,
+  noAccountText,
+  servingError,
+  vaultOffText,
+} from './messages.ts'
 
 /**
  * The attempt's own value. On HTTP, `accountHeaders` cannot read the vault
@@ -220,6 +225,11 @@ export interface VaultAdapterOptions {
    * handshake is refused before the vault is read.
    */
   handshakes?: HandshakeState
+  /**
+   * This host's account mode, read fresh, so a refusal for want of an
+   * account can say that vault mode is off instead.
+   */
+  authority?: () => Promise<'vault' | 'local' | 'unreadable'>
 }
 
 const defaultMarkMs = 60_000
@@ -292,6 +302,20 @@ export function createVaultAdapter(
           ? inspectResponsesFrame(data, attempt.data)
           : undefined
     : undefined
+  // With vault mode turned off, the hub empties every roster at its next
+  // authority read, so "no account" would wrongly tell the user to grant one.
+  // Only this refusal path asks for the mode; a served request never does.
+  const noAccount = async () => {
+    let mode: string | undefined
+    try {
+      mode = await options.authority?.()
+    } catch {}
+    return new Error(
+      mode === undefined || mode === 'vault'
+        ? noAccountText(options.provider)
+        : vaultOffText(options.provider),
+    )
+  }
   return {
     providerID: options.provider,
     async chooseAccount(input) {
@@ -302,7 +326,7 @@ export function createVaultAdapter(
       const consumer = await options.consumer()
       if (!consumer) {
         if (input.phase === 'retry') return undefined
-        throw new Error(noAccountText(options.provider))
+        throw await noAccount()
       }
       // Roster order, skipping accounts a 429 marked. A retry never picks the
       // refused account again: returning nothing keeps the host's decision.
@@ -316,7 +340,7 @@ export function createVaultAdapter(
       // answer, not a stale mark, decides whether the account is still limited.
       const any = routes(consumer, new Set(), undefined)[0]
       if (any !== undefined) return any
-      throw new Error(noAccountText(options.provider))
+      throw await noAccount()
     },
     async accountHeaders({
       sessionID,
