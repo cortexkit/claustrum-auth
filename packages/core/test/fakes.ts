@@ -165,3 +165,19 @@ async function withTable(
 
 export const placeholder = 'owned-placeholder'
 export const bearer = { authorization: `Bearer ${placeholder}` }
+
+// The operator's vault row for a shipped entry: the fleet's provider id, or,
+// for an entry served by exact credential id, that credential with no
+// provider id at all. Meta and xAI are OAuth rows in the operator's vault.
+export function vaultRowFor(
+  entry: ProviderEntry,
+  overrides: Partial<ScopedInventoryRow> = {},
+): ScopedInventoryRow {
+  const byCredential = entry.credentialIds?.[0]
+  const oauth = entry.service === 'meta' || entry.service === 'xai'
+  return row(byCredential ?? `${oauth ? 'oauth' : 'apikey'}:${entry.service}`, {
+    providerIds: byCredential ? [] : [entry.ids[0] as string],
+    ...(oauth ? { credentialType: 'oauth', authMethod: 'oauth' } : {}),
+    ...overrides,
+  })
+}
