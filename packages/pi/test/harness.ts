@@ -317,6 +317,8 @@ export async function fakeVault(initial: ScopedInventoryRow[] = []) {
     down: false,
     /** Fail reads only; listing keeps working. */
     readsDown: false,
+    /** Hold each list this long before answering, as a slow vault does. */
+    listDelayMs: 0,
     version: 1,
     lists: 0,
     reads: [] as string[],
@@ -334,6 +336,7 @@ export async function fakeVault(initial: ScopedInventoryRow[] = []) {
     if (state.down) return reply(503, {})
     if (op === 'list') {
       state.lists++
+      if (state.listDelayMs > 0) await Bun.sleep(state.listDelayMs)
       return reply(200, {
         rows: state.rows,
         view: `view-${state.rows.map((r) => r.id).join(',')}-${state.version}`,

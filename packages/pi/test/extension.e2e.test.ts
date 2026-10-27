@@ -316,8 +316,13 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     const before = await pi.models()
     expect(before).toContain('fixture-c/c-chat')
     expect(before).toContain('fixture-c/c-messages')
-    await pi.slash('/claustrum use fixture-c')
-    expect(pi.confirms[0]?.message).toContain('1 fixture-c model')
+    const answer = await pi.slash('/claustrum use fixture-c')
+    // When no consent dialog was asked, the notice the command ended with says
+    // why (no account, vault mode off, already owned, not running).
+    expect(
+      pi.confirms[0]?.message,
+      `no consent dialog; /claustrum use answered: ${answer}`,
+    ).toContain('1 fixture-c model')
     const owned = await pi.models()
     expect(owned).toContain('fixture-c/c-chat')
     expect(owned).not.toContain('fixture-c/c-messages')
@@ -369,6 +374,18 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
       ]),
     )
     expect(vault.reads).not.toContain('openai-key')
+  })
+
+  test('a slow first vault listing: use right after Pi starts waits for it and asks consent', async () => {
+    const { vault, launch } = await world({ rows: [row('c1', 'fixture-c')] })
+    vault.listDelayMs = 1_500
+    const pi = await launch()
+    const answer = await pi.slash('/claustrum use fixture-c')
+    expect(
+      pi.confirms[0]?.message,
+      `no consent dialog; /claustrum use answered: ${answer}`,
+    ).toContain('1 fixture-c model')
+    expect(answer).toContain('fixture-c now uses keys from the Claustrum vault')
   })
 
   test('vault down at start: providers are registered, and activation works once the vault answers', async () => {
