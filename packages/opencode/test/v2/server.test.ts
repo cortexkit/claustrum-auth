@@ -350,4 +350,6 @@ test('rows vanishing while owned refuse locally and send nothing', async () => {
     send(host, 'fixture-a', post(`${origin}/v1`, bearer('fixture-a'))),
   ).rejects.toThrow('no vault account for fixture-a')
   expect(vault.reads).toEqual([])
-})
+  // Two sign-ins and a roster change, each writing owner-only files for real:
+  // on Windows that takes the access-list path and runs past Bun's 5 s default.
+}, 20_000)
