@@ -76,6 +76,57 @@ jobs:
         env:
           CLAUSTRUM_AUTH_PI_E2E: '1'
 
+  # The Pi extension's files under <agentDir>/claustrum-auth after a real
+  # enrollment, on Windows: each one, and the folder, must carry an owner-only
+  # ACL, and a second, standard user must be refused them. The probe user is
+  # created and logged on once per job, because Windows takes 15-40 s to build
+  # a new user's profile on first logon. The scripts in
+  # packages/pi/test/windows provision that user, run the denial probe as it,
+  # and remove it again (adapted from the same scripts in the common-auth
+  # repository).
+  pi-windows-private-files:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: bun install --frozen-lockfile
+      - name: Provision and warm the standard probe user
+        id: probe_account
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./packages/pi/test/windows/provision-user.ps1
+          if ($LASTEXITCODE) { throw 'Standard-user profile provisioning failed' }
+      - name: Owner-only files after a real enrollment, and the second-user probe
+        timeout-minutes: 15
+        env:
+          CLAUSTRUM_AUTH_PI_E2E: '1'
+          CLAUSTRUM_AUTH_PI_SECOND_USER: '1'
+          CLAUSTRUM_AUTH_PROBE_USER: ${{ steps.probe_account.outputs.user }}
+          CLAUSTRUM_AUTH_PROBE_PASSWORD: ${{ steps.probe_account.outputs.password }}
+          CLAUSTRUM_AUTH_PROBE_SID: ${{ steps.probe_account.outputs.sid }}
+        run: bun test packages/pi/test/private-files.e2e.test.ts --timeout 300000
+      - name: Remove the standard probe user
+        if: always()
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          PROBE_USER: ${{ steps.probe_account.outputs.user }}
+          PROBE_SID: ${{ steps.probe_account.outputs.sid }}
+        run: |
+          $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./packages/pi/test/windows/cleanup-user.ps1 -Name $env:PROBE_USER -ExpectedSid $env:PROBE_SID
+          if ($LASTEXITCODE) { throw 'Probe account cleanup failed' }
+
   # Real-host tests on the pinned OpenCode 1 host: serving, redirects,
   # redaction and activation. The test installs opencode-ai into
   # target/opencode1-host on first use.

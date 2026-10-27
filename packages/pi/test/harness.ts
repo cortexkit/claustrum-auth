@@ -464,6 +464,8 @@ export interface PiOptions {
   production?: boolean
   /** Load this extension file instead of either bundle. */
   extension?: string
+  /** More extension files Pi loads beside the plugin, in this order. */
+  extensions?: string[]
   /** Answer consent dialogs with this; undefined leaves them unanswered. */
   confirm?: boolean
   env?: Record<string, string>
@@ -644,6 +646,7 @@ export async function startPi(options: PiOptions) {
       '-e',
       options.extension ??
         (options.production ? bundle.production : bundle.test),
+      ...(options.extensions ?? []).flatMap((file) => ['-e', file]),
     ],
     {
       cwd: home,

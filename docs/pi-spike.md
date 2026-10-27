@@ -50,6 +50,14 @@ job red.
 | Linux (x64) | Node 24.21 | holds | holds | holds as stated |
 | Windows (x64) | Bun 1.4.2 (the build machine has no Node; CI runs Node 24) | holds | holds | holds as stated |
 
+The build machine's Windows row ran Pi under Bun, but Pi itself ships for
+Node: its `pi` launcher (`dist/bundle/cli.js`) starts with
+`#!/usr/bin/env node`, and npm's `pi.cmd` on Windows runs it with node. The
+harness starts that same file with node, and
+`packages/pi/test/providers.e2e.test.ts` asserts that the extension sees Node
+(`process.versions.node`, no `process.versions.bun`, a `node` executable), so
+the `pi-e2e` job shows the Node runtime on every OS.
+
 ## Also found while building on these facts
 
 - Under Node (undici), `new Request(request, { body: null })` takes the body

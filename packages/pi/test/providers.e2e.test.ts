@@ -11,6 +11,7 @@
 // providers are the ones here.
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import {
   type AgentOptions,
   agentDir,
@@ -118,6 +119,46 @@ async function world(
 }
 
 describe.skipIf(!e2e)('live providers on the real Pi host', () => {
+  // Pi ships for Node: its `pi` launcher is `dist/bundle/cli.js` with a
+  // `#!/usr/bin/env node` line (npm's `pi.cmd` on Windows runs it with node),
+  // and the harness starts that same file with node. The extension reports
+  // the runtime it was loaded in, so every OS in CI shows that the provider
+  // tests below ran under Node and not under Bun, which runs the test itself.
+  test.skipIf(Boolean(process.env.CLAUSTRUM_AUTH_PI_RUNTIME))(
+    'Pi loads the extension under Node, as its own launcher does',
+    async () => {
+      const { agent, launch } = await world((origin) => ({
+        cerebras: override(origin),
+      }))
+      const runtime = `${agent.home}-runtime.jsonl`
+      const pi = await launch({ config: { shipped: true, runtime } })
+      expect(await pi.slash('/claustrum use cerebras')).toContain(
+        'cerebras now uses keys from the Claustrum vault',
+      )
+      expect(await pi.turn('cerebras', modelId)).toMatchObject({
+        text: 'served-ok',
+        error: '',
+      })
+      const [loaded, ...more] = (await readFile(runtime, 'utf8'))
+        .split('\n')
+        .filter(Boolean)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              execPath: string
+              versions: Record<string, string>
+            },
+        )
+      console.log(`Pi extension runtime: ${JSON.stringify(loaded)}`)
+      expect(more).toEqual([])
+      expect(loaded?.versions.bun).toBeUndefined()
+      expect(loaded?.versions.node).toMatch(/^\d+\.\d+\.\d+$/u)
+      expect(path.basename(loaded?.execPath ?? '').toLowerCase()).toMatch(
+        /^node(\.exe)?$/u,
+      )
+    },
+  )
+
   test('an owned live provider sends its vault key to its own origin only', async () => {
     const { mock, vault, agent, launch } = await world((origin) =>
       Object.fromEntries(

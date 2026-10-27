@@ -20,6 +20,11 @@ export interface PiTestConfig {
   /** A file that receives one line per provider registration. */
   registrations?: string
   /**
+   * A file that receives one line naming the runtime Pi loaded the extension
+   * in: its executable and `process.versions`.
+   */
+  runtime?: string
+  /**
    * Serve the shipped supported-provider table instead of the fixtures, with
    * the mock's loopback origin added to each entry so a models.json override
    * can point a live provider at the mock. Every other origin stays refused.
@@ -100,6 +105,11 @@ const extension = createPiExtension({
 })
 
 export default function claustrumAuthTest(pi: ExtensionAPI) {
+  if (config.runtime)
+    appendFileSync(
+      config.runtime,
+      `${JSON.stringify({ execPath: process.execPath, versions: process.versions })}\n`,
+    )
   const log = config.registrations
   if (!log) return extension(pi)
   const registerProvider = (name: string, provider: never) => {
