@@ -31,3 +31,27 @@ jobs:
         run: |
           tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
           test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
+
+  # The OpenCode 2 entry on the real pinned host (@opencode/cli, see
+  # OPENCODE_CLI_VERSION in the test) against a loopback mock provider and a
+  # fake vault: section 14.2 of the design and the 14.3 HTTP redirect proof.
+  # It installs the CLI with npm, so it needs the network.
+  opencode2-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: bun install --frozen-lockfile
+      - name: OpenCode 2 real-host cases
+        working-directory: packages/opencode
+        env:
+          CLAUSTRUM_AUTH_OPENCODE2_E2E: '1'
+        run: bun test --timeout 600000 test/v2/e2e/opencode2.e2e.test.ts

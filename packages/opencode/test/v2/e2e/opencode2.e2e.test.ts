@@ -299,31 +299,45 @@ class Scenario {
     ].join('\n')
   }
 
+  /** Secrets that must appear nowhere the host or the plugin wrote or printed. */
+  readonly secrets = new Set<string>()
+  mustNotLeak(...needles: string[]) {
+    for (const needle of needles) this.secrets.add(needle)
+  }
+
   /**
    * Every file the host and the plugin wrote under the scratch profile, and
-   * everything every process printed, scanned for `needles`. The profile
-   * holds the host's database (stored session errors included) and its logs.
+   * everything every process printed, scanned for the registered secrets.
+   * The profile holds the host's database (stored session errors included)
+   * and its logs. It runs after every process stopped, so the database is
+   * complete and no file is held open (Windows refuses reading one that is).
    */
-  leaks(needles: readonly string[]) {
-    const found: string[] = []
+  scan() {
+    const leaks: string[] = []
+    const files: string[] = []
     const visit = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const file = path.join(dir, entry.name)
         if (entry.isDirectory()) visit(file)
         else if (entry.isFile()) {
+          files.push(path.relative(this.root, file))
           const bytes = readFileSync(file)
-          for (const needle of needles)
+          for (const needle of this.secrets)
             if (bytes.includes(needle))
-              found.push(`${path.relative(this.root, file)}: ${needle}`)
+              leaks.push(`${path.relative(this.root, file)}: ${needle}`)
         }
       }
     }
     visit(this.root)
     for (const host of this.hosts)
-      for (const needle of needles)
+      for (const needle of this.secrets)
         if (`${host.stdout.join('')}${host.stderr.join('')}`.includes(needle))
-          found.push(`${host.name} output: ${needle}`)
-    return found
+          leaks.push(`${host.name} output: ${needle}`)
+    return {
+      leaks,
+      files: files.length,
+      databases: files.filter((file) => /opencode[^/\\]*\.db/.test(file)),
+    }
   }
 
   async stop() {
@@ -362,6 +376,14 @@ async function scenario(
   const problems = await run.stop()
   if (!failure && problems.length)
     failure = new Error(`cleanup failed: ${problems.join('; ')}`)
+  if (!failure && run.secrets.size) {
+    const scan = run.scan()
+    console.log(`LEAK-SCAN: ${JSON.stringify(scan)}`)
+    // The host's database must have been there to be scanned.
+    if (!scan.databases.length) failure = new Error('no host database found')
+    else if (scan.leaks.length)
+      failure = new Error(`served secrets leaked:\n${scan.leaks.join('\n')}`)
+  }
   if (failure) {
     console.error(run.describe())
     await run.remove().catch(() => {})
@@ -604,7 +626,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
 
       for (const placeholder of placeholders)
         expect(onWire(run, placeholder)).toEqual([])
-      expect(run.leaks(rows.map((row) => vault.secret(row.id)))).toEqual([])
+      run.mustNotLeak(...rows.map((row) => vault.secret(row.id)))
     })
   }, 600_000)
 
@@ -691,9 +713,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
 
       for (const placeholder of placeholders)
         expect(onWire(run, placeholder)).toEqual([])
-      const leaks = run.leaks([secret])
-      console.log(`THROWN-TRANSPORT-ERROR: ${JSON.stringify({ leaks })}`)
-      expect(leaks).toEqual([])
+      run.mustNotLeak(secret)
     })
   }, 600_000)
 
@@ -801,7 +821,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
           expect(files.length).toBeGreaterThan(1)
           expect(files.filter((entry) => !entry.endsWith(' 600'))).toEqual([])
         }
-        expect(run.leaks(rows.map((row) => vault.secret(row.id)))).toEqual([])
+        run.mustNotLeak(...rows.map((row) => vault.secret(row.id)))
       },
       { offline: true },
     )
@@ -883,6 +903,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         ).toBe(0)
       console.log(`RESET-PROOF: ${JSON.stringify(resetProof(run.events()))}`)
       expect(vault.reads.length).toBeGreaterThan(0)
+      run.mustNotLeak(...rows.map((row) => vault.secret(row.id)))
     })
   }, 600_000)
 })
@@ -906,7 +927,8 @@ function resetProof(events: PluginEvent[]) {
   const late: unknown[] = []
   let transitions = 0
   for (const entry of events) {
-    const sessionID = String(entry.sessionID)
+    if (typeof entry.sessionID !== 'string') continue
+    const sessionID = entry.sessionID
     const state = sessions.get(sessionID) ?? {
       busy: false,
       terminals: 0,
