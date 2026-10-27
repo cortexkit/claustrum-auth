@@ -168,6 +168,22 @@ test('use refuses without vault mode, without a routable row, and under OPENCODE
   ).toBe(false)
 })
 
+test('use names an account list the plugin could not save, instead of no account, and writes nothing', async () => {
+  const auth = fakeAuth()
+  const outcome = await useProvider(
+    await context(auth.api, {
+      vault: async () => ({ vaultOn: true, routable: false, unsaved: 'EPERM' }),
+    }),
+    P,
+  )
+  expect(outcome.ok).toBe(false)
+  expect(outcome.message).toContain(
+    `local account list for ${P} could not be saved (EPERM)`,
+  )
+  expect(outcome.message).not.toContain('no vault account')
+  expect(auth.writes).toEqual([])
+})
+
 test('a login completed before the last read makes use refuse and keeps the user key', async () => {
   const auth = fakeAuth()
   // Read 1 is the early check; read 2 is the last read before the write.

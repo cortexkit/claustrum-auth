@@ -35,7 +35,7 @@ export {
   reservedProviders,
   supportedProviders,
 } from './providers.js'
-export type { CoreOptions } from './runtime.js'
-export { createCore } from './runtime.js'
+export type { CoreOptions, RosterCore } from './runtime.js'
+export { createCore, unsavedRosterCause } from './runtime.js'
 export type { ServingConsumer, ServingOptions } from './serving.js'
 export { orderedRoutes, servingCallbacks } from './serving.js'

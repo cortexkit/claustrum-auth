@@ -24,6 +24,13 @@ import { slotKey, userAuthText, waitForPlaceholder, world } from './scenario.ts'
 const bearerOf = (id: string, version = 1) => `Bearer ${secretOf(id, version)}`
 const authorizations = (requests: { headers: Record<string, unknown> }[]) =>
   requests.map((request) => request.headers.authorization)
+// The consent dialog a command asked, beside the notice the command ended
+// with. When no dialog was asked, a failed match prints that notice, which
+// says why: no account, vault mode off, already owned, or not running.
+const consentAsked = (
+  pi: { confirms: { message: string }[] },
+  answer: string,
+) => ({ consent: pi.confirms[0]?.message ?? 'none asked', answer })
 
 // Each case starts one or two real Pi processes.
 setDefaultTimeout(90_000)
@@ -317,12 +324,9 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(before).toContain('fixture-c/c-chat')
     expect(before).toContain('fixture-c/c-messages')
     const answer = await pi.slash('/claustrum use fixture-c')
-    // When no consent dialog was asked, the notice the command ended with says
-    // why (no account, vault mode off, already owned, not running).
-    expect(
-      pi.confirms[0]?.message,
-      `no consent dialog; /claustrum use answered: ${answer}`,
-    ).toContain('1 fixture-c model')
+    expect(consentAsked(pi, answer)).toMatchObject({
+      consent: expect.stringContaining('1 fixture-c model'),
+    })
     const owned = await pi.models()
     expect(owned).toContain('fixture-c/c-chat')
     expect(owned).not.toContain('fixture-c/c-messages')
@@ -381,11 +385,37 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     vault.listDelayMs = 1_500
     const pi = await launch()
     const answer = await pi.slash('/claustrum use fixture-c')
-    expect(
-      pi.confirms[0]?.message,
-      `no consent dialog; /claustrum use answered: ${answer}`,
-    ).toContain('1 fixture-c model')
+    expect(consentAsked(pi, answer)).toMatchObject({
+      consent: expect.stringContaining('1 fixture-c model'),
+    })
     expect(answer).toContain('fixture-c now uses keys from the Claustrum vault')
+  })
+
+  test('a roster commit that failed is not reported as no account: use lists again and asks consent', async () => {
+    const { launch } = await world({ rows: [row('c1', 'fixture-c')] })
+    // The first discovery after start and the refresh use begins with both
+    // fail to save fixture-c's list; the vault itself serves an account.
+    const pi = await launch({
+      config: { blockRoster: { provider: 'fixture-c', refreshes: 2 } },
+    })
+    const answer = await pi.slash('/claustrum use fixture-c')
+    expect(consentAsked(pi, answer)).toMatchObject({
+      consent: expect.stringContaining('1 fixture-c model'),
+    })
+    expect(answer).toContain('fixture-c now uses keys from the Claustrum vault')
+  })
+
+  test('a roster that stays unsaved is named as such, not as no account', async () => {
+    const { launch } = await world({ rows: [row('c1', 'fixture-c')] })
+    const pi = await launch({
+      config: { blockRoster: { provider: 'fixture-c', refreshes: 100 } },
+    })
+    const answer = await pi.slash('/claustrum use fixture-c')
+    expect(answer).toContain(
+      'local account list for fixture-c could not be saved',
+    )
+    expect(answer).not.toContain('serves no usable account')
+    expect(pi.confirms).toEqual([])
   })
 
   test('vault down at start: providers are registered, and activation works once the vault answers', async () => {

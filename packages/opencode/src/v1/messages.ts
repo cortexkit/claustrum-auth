@@ -71,5 +71,11 @@ export function refusalMessage(code: string, provider: string): string {
   }
 }
 
+// The vault answered, but the plugin could not save its account list for the
+// provider, so whether the vault has an account for it is not known yet.
+export function unsavedRosterMessage(provider: string, cause: string): string {
+  return `claustrum-auth: the local account list for ${provider} could not be saved (${cause}), so the plugin cannot tell yet whether the vault has an account for ${provider}. Nothing changed; run ${command} use ${provider} again.`
+}
+
 export const concurrentWriteWarning =
   'Do not run this while logging in to any provider elsewhere: OpenCode rewrites the whole auth file on every login, so a login that lands at the same moment can be lost.'

@@ -59,6 +59,11 @@ export const activationRefusals: Record<string, (provider: string) => string> =
 export const unknownProvider = (provider: string) =>
   `The claustrum-auth plugin does not serve "${provider}" on this Pi. It serves: `
 
+// The vault answered, but the plugin could not save its account list for the
+// provider, so whether the vault has an account for it is not known yet.
+export const unsavedRosterText = (provider: string, cause: string) =>
+  `claustrum-auth: the local account list for ${provider} could not be saved (${cause}), so the plugin cannot tell yet whether the vault has an account for ${provider}. Nothing changed; run ${command} use ${provider} again.`
+
 export const usage = `Usage: ${command} use <provider> | ${command} release <provider>`
 
 export const enteredText = (provider: string) =>

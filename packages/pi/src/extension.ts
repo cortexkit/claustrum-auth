@@ -15,6 +15,7 @@ import {
   piEnrollment,
   SlotQueue,
   transitionActivation,
+  unsavedRosterCause,
   vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
@@ -55,6 +56,7 @@ import {
   releasedText,
   releaseKeptText,
   unknownProvider,
+  unsavedRosterText,
   usage,
 } from './messages.js'
 import { type BearerApi, bearerApi, ownedModels } from './models.js'
@@ -442,7 +444,21 @@ class PiRuntime {
       return
     }
     const vaultOn = (await this.#authority()) === 'vault'
-    if (vaultOn) await this.#core.hub.refresh().catch(() => {})
+    // The refresh joins a discovery already in flight, such as the first one
+    // after Pi starts, so the decision below waits for the vault's answer.
+    const listed =
+      vaultOn &&
+      (await this.#core.hub.refresh().then(
+        () => true,
+        () => false,
+      ))
+    const unsaved = listed
+      ? await unsavedRosterCause(this.#core, provider)
+      : undefined
+    if (unsaved !== undefined) {
+      ctx.ui.notify(unsavedRosterText(provider, unsaved), 'error')
+      return
+    }
     const routable = vaultOn && this.routable(served)
     let consented = served.state.consented
     if (vaultOn && routable && !consented && served.state.status !== 'owned') {

@@ -4,6 +4,7 @@ import type { ReleasedFlags } from './flags.js'
 import {
   concurrentWriteWarning,
   refusalMessage,
+  unsavedRosterMessage,
   userCredentialMessage,
 } from './messages.js'
 import {
@@ -29,8 +30,14 @@ export interface ActivationContext {
   flags: ReleasedFlags
   listed(provider: string): boolean
   // Fresh `enrollmentAuthority()` and a hub refresh; resolves whether vault
-  // mode is on and whether the provider has a routable vault row.
-  vault(provider: string): Promise<{ vaultOn: boolean; routable: boolean }>
+  // mode is on and whether the provider has a routable vault row. `unsaved`
+  // names why the vault's list for the provider could not be saved, when the
+  // vault answered but the plugin still holds no list for it.
+  vault(provider: string): Promise<{
+    vaultOn: boolean
+    routable: boolean
+    unsaved?: string
+  }>
   // What else could make a user key effective: environment and config.
   env(): Readonly<Record<string, string | undefined>>
   envNames(provider: string): Promise<readonly string[]>
@@ -95,7 +102,9 @@ export async function useProvider(
       ok: false,
       message: userCredentialMessage(provider, early, platform),
     }
-  const vault = await context.vault(provider)
+  const { unsaved, ...vault } = await context.vault(provider)
+  if (unsaved !== undefined)
+    return { ok: false, message: unsavedRosterMessage(provider, unsaved) }
   const activated = transitionActivation(
     {
       host: 'opencode1',

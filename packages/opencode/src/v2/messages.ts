@@ -20,6 +20,12 @@ export function unreachableText(provider: string) {
   return `claustrum-auth plugin: the Claustrum vault could not be reached, so ${provider} was not sent. Start the vault, or switch ${provider} back to your own key.`
 }
 
+// The vault answered, but the plugin could not save its account list for the
+// provider, so whether the vault has an account for it is not known yet.
+export function unsavedRosterText(provider: string, cause: string) {
+  return `claustrum-auth plugin: the local account list for ${provider} could not be saved (${cause}), so the plugin cannot tell yet whether the vault has an account for ${provider}. Nothing changed; sign in with "Claustrum vault (claustrum-auth plugin)" again.`
+}
+
 export function vaultOffText(provider: string) {
   return `claustrum-auth plugin: vault mode is off on this host, so ${provider} was not sent. Run the claustrum-auth plugin's setup, or switch ${provider} back to your own key.`
 }

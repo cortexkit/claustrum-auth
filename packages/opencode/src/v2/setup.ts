@@ -7,6 +7,7 @@ import {
   pluginId,
   reservedProviders,
   type ServingConsumer,
+  unsavedRosterCause,
   vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
 import type { ClaustrumDiscoveryHub } from '@cortexkit/common-auth/claustrum'
@@ -30,6 +31,7 @@ import {
   noAccountText,
   placementText,
   unreachableText,
+  unsavedRosterText,
   vaultOffText,
 } from './messages.ts'
 
@@ -42,6 +44,8 @@ export interface ServerCore {
   hub: Pick<ClaustrumDiscoveryHub, 'start' | 'refresh' | 'dispose'> & MenuHub
   consumers: ReadonlyMap<string, ServingConsumer & MenuConsumer>
   entries: readonly ProviderEntry[]
+  /** Each member's latest failure, as `createCore` records it. */
+  memberErrors: Map<string, unknown>
 }
 
 export interface ServerDeps {
@@ -163,6 +167,9 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
       deps.onError?.(error)
       throw new Error(unreachableText(provider))
     }
+    const unsaved = await unsavedRosterCause(built, provider)
+    if (unsaved !== undefined)
+      throw new Error(unsavedRosterText(provider, unsaved))
     const consumer = built.consumers.get(provider)
     if (!consumer || consumer.routingRows().length === 0)
       throw new Error(noAccountText(provider))

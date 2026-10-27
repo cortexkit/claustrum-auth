@@ -4,6 +4,7 @@ import {
   opencodeEnrollment,
   type ProviderEntry,
   reservedProviders,
+  unsavedRosterCause,
   vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
@@ -37,6 +38,7 @@ type Core = {
   hub: ClaustrumDiscoveryHub
   consumers: ReadonlyMap<string, ClaustrumConsumer>
   entries: readonly ProviderEntry[]
+  memberErrors: Map<string, unknown>
 }
 
 export interface OpenCode1PluginOptions {
@@ -157,7 +159,11 @@ export async function opencode1Hosts(
         await core.hub.refresh()
       } catch {
         // An unreachable vault leaves the last committed roster in place.
+        const consumer = core.consumers.get(provider)
+        return { vaultOn, routable: !!consumer?.routingRows().length }
       }
+      const unsaved = await unsavedRosterCause(core, provider)
+      if (unsaved !== undefined) return { vaultOn, routable: false, unsaved }
       const consumer = core.consumers.get(provider)
       return { vaultOn, routable: !!consumer?.routingRows().length }
     },

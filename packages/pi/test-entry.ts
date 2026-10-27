@@ -1,7 +1,7 @@
 // The Pi test build: the real extension with fixture providers, loopback
 // origins and a fake vault reached over HTTP. It lives outside src, so neither the published bundle nor npm pack
 // can contain it.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, rmSync } from 'node:fs'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
@@ -30,6 +30,13 @@ export interface PiTestConfig {
    * can point a live provider at the mock. Every other origin stays refused.
    */
   shipped?: boolean
+  /**
+   * Make one provider's roster commits fail: a folder stands at its roster
+   * file's path, so the hub can neither read nor write that file, until the
+   * plugin has asked the hub for `refreshes` refreshes. The next refresh it
+   * asks for removes the folder first and commits normally.
+   */
+  blockRoster?: { provider: string; refreshes: number }
 }
 
 const config = JSON.parse(
@@ -98,8 +105,24 @@ const client: ClaustrumScopedClient = {
 }
 
 const extension = createPiExtension({
-  createCore: (options) =>
-    createTestCore(options, config.shipped ? shippedEntries : piFixtureEntries),
+  createCore: (options) => {
+    const core = createTestCore(
+      options,
+      config.shipped ? shippedEntries : piFixtureEntries,
+    )
+    const block = config.blockRoster
+    if (!block) return core
+    const target = core.hub.rosterPath(block.provider)
+    mkdirSync(target, { recursive: true, mode: 0o700 })
+    const refresh = core.hub.refresh.bind(core.hub)
+    let calls = 0
+    core.hub.refresh = () => {
+      if (++calls > block.refreshes)
+        rmSync(target, { recursive: true, force: true })
+      return refresh()
+    }
+    return core
+  },
   connect: async () => client,
   syncIntervalMs: config.syncMs ?? 200,
 })
