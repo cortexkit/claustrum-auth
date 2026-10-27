@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describeConfig, describeHosts, describePlugin } from './diagnostics.ts'
@@ -23,6 +29,44 @@ test('failure diagnostics keep startup and every process across a restart', () =
   expect(output).toContain('method not found')
   expect(output).toContain('second server startup')
 })
+
+test.each(['directory', 'junction'] as const)(
+  'failure diagnostics list scoped dependencies and identify a node_modules %s',
+  (layout) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'oc2-module-diagnostics-'))
+    try {
+      const plugin = path.join(root, 'plugin')
+      mkdirSync(plugin)
+      const modules =
+        layout === 'directory'
+          ? path.join(plugin, 'node_modules')
+          : path.join(root, 'installed')
+      const dependency = path.join(modules, '@cortexkit', 'claustrum-client')
+      mkdirSync(dependency, { recursive: true })
+      writeFileSync(path.join(dependency, 'not-a-recursive-module-dump.js'), '')
+      if (layout === 'junction') {
+        symlinkSync(modules, path.join(plugin, 'node_modules'), 'junction')
+      }
+      const listing = describePlugin(plugin)
+      expect(listing).toContain('plugin node_modules listing and link types')
+      expect(listing).toContain(
+        JSON.stringify(path.join(plugin, 'node_modules')),
+      )
+      expect(listing).toContain(
+        JSON.stringify(
+          path.join(plugin, 'node_modules', '@cortexkit', 'claustrum-client'),
+        ),
+      )
+      expect(listing).toContain(
+        `"type":"${layout === 'directory' ? 'directory' : 'symbolic link (junction on Windows)'}"`,
+      )
+      if (layout === 'junction') expect(listing).toContain('"target":')
+      expect(listing).not.toContain('not-a-recursive-module-dump.js')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+)
 
 test('failure diagnostics print the exact config and recursive plugin file list', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'oc2-diagnostics-'))

@@ -1,4 +1,10 @@
-import { readdirSync, readFileSync, realpathSync } from 'node:fs'
+import {
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+} from 'node:fs'
 import path from 'node:path'
 import type { HostProcess } from './host.ts'
 
@@ -25,13 +31,52 @@ export function describeConfig(file: string) {
   }
 }
 
+function describeModules(dir: string) {
+  const modules = path.join(dir, 'node_modules')
+  const files: string[] = []
+  const describe = (file: string) => {
+    try {
+      const stat = lstatSync(file)
+      const type = stat.isSymbolicLink()
+        ? 'symbolic link (junction on Windows)'
+        : stat.isDirectory()
+          ? 'directory'
+          : 'file'
+      files.push(
+        JSON.stringify({
+          ...describePath(file),
+          type,
+          ...(stat.isSymbolicLink() ? { target: readlinkSync(file) } : {}),
+        }),
+      )
+    } catch (error) {
+      files.push(`${file}: ${failure(error)}`)
+    }
+  }
+  describe(modules)
+  try {
+    for (const name of readdirSync(modules).sort()) {
+      const file = path.join(modules, name)
+      describe(file)
+      if (name.startsWith('@')) {
+        for (const entry of readdirSync(file).sort()) {
+          describe(path.join(file, entry))
+        }
+      }
+    }
+  } catch (error) {
+    files.push(failure(error))
+  }
+  return `--- plugin node_modules listing and link types\n${files.join('\n')}`
+}
+
 export function describePlugin(dir: string) {
   const files: string[] = []
   const visit = (folder: string) => {
     for (const entry of readdirSync(folder, { withFileTypes: true })) {
       const file = path.join(folder, entry.name)
       files.push(path.relative(dir, file) + (entry.isDirectory() ? '/' : ''))
-      if (entry.isDirectory()) visit(file)
+      if (entry.isDirectory() && entry.name !== 'node_modules') visit(file)
     }
   }
   try {
@@ -39,7 +84,7 @@ export function describePlugin(dir: string) {
   } catch (error) {
     files.push(failure(error))
   }
-  return `--- plugin folder ${JSON.stringify(describePath(dir))}\n${files.sort().join('\n')}`
+  return `--- plugin folder ${JSON.stringify(describePath(dir))}\n${files.sort().join('\n')}\n${describeModules(dir)}`
 }
 
 /** Startup contains loader failures; keep it even after requests or a restart. */

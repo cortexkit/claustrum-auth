@@ -71,8 +71,21 @@ request.
 
 ### Real-host startup diagnostics
 
-The fixture bundle uses the production runtime externals, with a
-`node_modules` link to the installed dependencies. In particular,
+The fixture bundle uses the production runtime externals. Linux and macOS
+use a `node_modules` link to the installed dependencies. Windows uses real
+directories containing copies of the installed external packages and their
+production dependencies, not a junction. Each package is located through the
+resolver from its importer, so copying does not assume dependencies live in
+the workspace package's own `node_modules` rather than a hoisted location.
+Copies retain the installed versions without a second registry install.
+The real-directory layout is also tested on POSIX, in a path with spaces and
+a tilde, including transitive imports and byte-for-byte native prebuilds.
+The probe uses filesystem-directory parents for resolution and loads the
+externals in a separate Bun process. Bun 1.4.2 can fail an explicit-parent
+lookup using a percent-encoded file URL even when the dependency folders are
+real, so a URL-based resolver assertion alone cannot diagnose a broken link.
+
+In particular,
 `@cortexkit/private-files` must keep its package layout: its Windows loader
 finds `../prebuilds/*.node` relative to its own `import.meta.url`. Inlining
 that loader into the scratch plugin relocates the lookup to a nonexistent
@@ -82,8 +95,10 @@ registering any login method on Windows. The published build already keeps
 these dependencies external.
 
 On a failed scenario the harness prints the exact `opencode.json`, the plugin
-folder's recursive file list, native realpaths alongside the supplied paths,
-and the full stdout and stderr of every host process, including servers from
+folder's recursive file list (excluding dependency contents), the plugin's
+`node_modules` listing including scoped packages, directory/link types and
+link targets, native realpaths alongside the supplied paths, and the full
+stdout and stderr of every host process, including servers from
 before a restart. The server runs with debug logging; startup loader errors
 are not truncated to the last requests. The fixture also records import,
 setup and enrollment-token stages, and rethrows setup errors after recording
