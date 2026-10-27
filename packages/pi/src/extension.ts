@@ -56,12 +56,7 @@ import {
   unknownProvider,
   usage,
 } from './messages.js'
-import {
-  type BearerApi,
-  bearerApi,
-  isServableModel,
-  ownedModels,
-} from './models.js'
+import { type BearerApi, bearerApi, ownedModels } from './models.js'
 
 export type ClaustrumCore = ReturnType<typeof createCore>
 export interface PiExtensionOptions {
@@ -90,6 +85,9 @@ interface Served {
   lastExit?: 'restored' | 'conflict' | 'nothing-to-do' | 'failed'
   lastError?: string
 }
+
+// How long an owned request waits for the vault's first account list.
+const firstDiscoveryWaitMs = 2_000
 
 /** The api_key Pi keeps in a provider's slot while the vault serves it. */
 export const placeholderKey = (provider: string) =>
@@ -160,6 +158,7 @@ class PiRuntime {
   #authority: () => Promise<Authority>
   #notLocal = false
   #syncing = false
+  #firstDiscovery: Promise<void> = Promise.resolve()
   #timer: ReturnType<typeof setInterval> | undefined
 
   constructor(
@@ -330,6 +329,13 @@ class PiRuntime {
           return await inner(input, init)
         if ((await this.#authority()) !== 'vault')
           throw new ClaustrumAuthError('vault-mode-off')
+        // A request sent right after Pi starts waits briefly for the first
+        // account list instead of being refused for having none yet.
+        if (!this.routable(served))
+          await Promise.race([
+            this.#firstDiscovery,
+            new Promise((resolve) => setTimeout(resolve, firstDiscoveryWaitMs)),
+          ])
         return await serve(input, init)
       } catch (error) {
         const code = refusalCode(error)
@@ -414,11 +420,8 @@ class PiRuntime {
       }
     }
     this.#core.hub.start()
-    void this.#core.hub
-      .refresh()
-      .catch(() => {})
-      .then(() => this.sync())
-      .catch(() => {})
+    this.#firstDiscovery = this.#core.hub.refresh().catch(() => {})
+    void this.#firstDiscovery.then(() => this.sync()).catch(() => {})
     this.#timer = setInterval(() => {
       void this.sync().catch(() => {})
     }, syncIntervalMs)
@@ -442,9 +445,7 @@ class PiRuntime {
       const models = ctx.modelRegistry
         .getAll()
         .filter((model) => model.provider === provider)
-      const hidden = models.filter(
-        (model) => !isServableModel(model) || model.api !== served.api,
-      ).length
+      const hidden = models.filter((model) => model.api !== served.api).length
       consented = await ctx.ui.confirm(
         consentTitle(provider),
         consentText(provider, hidden),

@@ -2,9 +2,12 @@
 // The plugin follows no cross-origin redirect, so the second origin must see
 // no request at all, while the same-origin and no-redirect controls in the
 // same run do deliver the vault key, so a zero there is real.
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { e2e, row, secretOf } from './harness.ts'
 import { redirectCodes, world } from './scenario.ts'
+
+// Each case starts one or two real Pi processes.
+setDefaultTimeout(90_000)
 
 describe.skipIf(!e2e)('HTTP redirect proof on the real host', () => {
   test('a cross-origin 301, 302, 303, 307 or 308 never carries the vault key to the second origin', async () => {

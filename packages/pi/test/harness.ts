@@ -2,7 +2,7 @@
 // folder, a loopback mock provider and a fake vault. Every Pi it starts gets
 // its own PI_CODING_AGENT_DIR, HOME and USERPROFILE under target/scratch, so a
 // test never reads or writes the real ~/.pi.
-import { afterEach, setDefaultTimeout } from 'bun:test'
+import { afterEach } from 'bun:test'
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -20,28 +20,28 @@ import { buildPiBundle } from '../build.ts'
 import type { PiTestConfig } from '../test-entry.ts'
 
 export const e2e = process.env.CLAUSTRUM_AUTH_PI_E2E === '1'
-// A real Pi starts in about a second, and Windows can take two seconds to
-// refuse a connection to a closed loopback port.
-setDefaultTimeout(90_000)
 const root = path.join(import.meta.dir, '..', '..', '..')
+// The pinned Pi CLI, wherever the package manager placed it.
 const piCli = path.join(
-  import.meta.dir,
-  '..',
-  'node_modules',
-  '@earendil-works',
-  'pi-coding-agent',
-  'dist',
+  path.dirname(
+    Bun.resolveSync('@earendil-works/pi-coding-agent', import.meta.dir),
+  ),
   'bundle',
   'cli.js',
 )
 
 const cleanup: (() => Promise<unknown> | unknown)[] = []
+// Stopping Pi and removing its folders can take several seconds on Windows.
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close()
-})
+}, 60_000)
 
 export async function scratch(prefix: string) {
-  const base = path.join(root, 'target', 'scratch')
+  // Windows private files refuse a folder below a junction or symlink, so a
+  // machine whose checkout sits under one can point this elsewhere.
+  const base =
+    process.env.CLAUSTRUM_AUTH_PI_SCRATCH ??
+    path.join(root, 'target', 'scratch')
   await mkdir(base, { recursive: true })
   const dir = await mkdtemp(path.join(base, `${prefix}-`))
   cleanup.push(() =>
@@ -608,8 +608,10 @@ export async function startPi(options: PiOptions) {
     ...options.config,
   }
   const home = options.agent.home
+  // Pi ships for Node; CLAUSTRUM_AUTH_PI_RUNTIME can name another runtime
+  // for machines without one.
   const child = spawn(
-    'node',
+    process.env.CLAUSTRUM_AUTH_PI_RUNTIME ?? 'node',
     [
       piCli,
       '--mode',

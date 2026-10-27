@@ -1,11 +1,18 @@
 // Pi slot handling on the real host: concurrent entry from two processes,
 // crash recovery, the stash's Windows durability, and byte-for-byte release.
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, statSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { openPiSlot } from '@cortexkit/common-auth/pi-slot'
-import { e2e, placeholderOf, readAuth, row, secretOf } from './harness.ts'
+import {
+  e2e,
+  placeholderOf,
+  readAuth,
+  row,
+  secretOf,
+  until,
+} from './harness.ts'
 import {
   fillers,
   userAuthText,
@@ -16,6 +23,9 @@ import {
 
 const stashOf = (state: string, providerId: string) =>
   path.join(state, 'pi-slots', `${providerId}.json`)
+
+// Each case starts one or two real Pi processes.
+setDefaultTimeout(90_000)
 
 describe.skipIf(!e2e)('Pi slots on the real host', () => {
   test('ten providers entered concurrently by two Pi processes keep auth.json consistent, and release restores it byte for byte', async () => {
@@ -34,10 +44,13 @@ describe.skipIf(!e2e)('Pi slots on the real host', () => {
     })
     const [first, second] = await Promise.all([launch(), launch()])
     for (const id of ten) await waitForPlaceholder(agent.authPath, id)
-    // Each status waits for that process's queued slot work to finish.
+    // Both processes enter on their own first discovery; a status waits for
+    // that process's queued slot work to finish.
     for (const pi of [first, second])
-      for (const id of ten)
-        expect(await pi.slash('/claustrum')).toContain(`${id}: owned`)
+      await until(async () => {
+        const status = await pi.slash('/claustrum')
+        return ten.every((id) => status.includes(`${id}: owned`))
+      })
     const auth = await readAuth(agent.authPath)
     for (const id of ten) {
       expect(auth[id]).toEqual({ type: 'api_key', key: placeholderOf(id) })

@@ -7,10 +7,6 @@ import type { ProviderModelConfig } from '@earendil-works/pi-coding-agent'
 export const bearerApis = ['openai-completions', 'openai-responses'] as const
 export type BearerApi = (typeof bearerApis)[number]
 
-function isBearerApi(api: string): api is BearerApi {
-  return bearerApis.some((candidate) => candidate === api)
-}
-
 // A Pi registration serves one api. Pick the one most of the provider's models
 // use, preferring chat completions on a tie, so the registration is stable.
 export function bearerApi(
@@ -26,10 +22,6 @@ export function bearerApi(
     }
   }
   return best
-}
-
-export function isServableModel(model: Model<Api>) {
-  return isBearerApi(model.api)
 }
 
 // The owned registration replaces the provider's model list. It keeps every

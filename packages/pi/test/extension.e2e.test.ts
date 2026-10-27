@@ -1,5 +1,5 @@
 // Section 14.2 of the design on the real Pi CLI, with the fixture providers.
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import {
   anyFileContains,
@@ -15,6 +15,9 @@ import { slotKey, userAuthText, waitForPlaceholder, world } from './scenario.ts'
 const bearerOf = (id: string, version = 1) => `Bearer ${secretOf(id, version)}`
 const authorizations = (requests: { headers: Record<string, unknown> }[]) =>
   requests.map((request) => request.headers.authorization)
+
+// Each case starts one or two real Pi processes.
+setDefaultTimeout(90_000)
 
 describe.skipIf(!e2e)('Pi extension on the real host', () => {
   test('class A owned: only the vault key reaches the wire, and release restores the login byte for byte', async () => {
@@ -314,7 +317,7 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
 
   test('release, then restart: the provider stays released', async () => {
     const original = userAuthText()
-    const { vault, agent, launch } = await world({
+    const { agent, launch } = await world({
       rows: [row('a1', 'fixture-a')],
       authText: original,
       flags: { 'fixture-a': { consented: true } },
@@ -324,10 +327,15 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     await first.slash('/claustrum release fixture-a')
     expect(await readFile(agent.authPath, 'utf8')).toBe(original)
     await first.stop()
-    const lists = vault.lists
     const second = await launch()
-    // Discovery ran and found the row routable, and still nothing re-entered.
-    await until(() => vault.lists > lists)
+    // Discovery finds the row routable, which would enter a consented,
+    // unreleased provider; give the sync loop several rounds to act on it.
+    await until(async () =>
+      (await second.slash('/claustrum')).includes(
+        'fixture-a: available, 1 vault account(s), released',
+      ),
+    )
+    await Bun.sleep(500)
     expect(await second.slash('/claustrum')).toContain(
       'fixture-a: available, 1 vault account(s), released',
     )

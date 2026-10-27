@@ -1,6 +1,6 @@
 // The Pi spike: three facts about Pi 1.3.0 that the extension is built on,
 // measured on the real Pi CLI. Results per OS are recorded in docs/pi-spike.md.
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
@@ -42,6 +42,9 @@ async function spikePi(
       .map((line) => JSON.parse(line))
   return { pi, mock, entries }
 }
+
+// Each case starts one or two real Pi processes.
+setDefaultTimeout(90_000)
 
 describe.skipIf(!e2e)('Pi spike', () => {
   test('fact 1: openai-completions and openai-responses send every request through the caller fetch', async () => {
