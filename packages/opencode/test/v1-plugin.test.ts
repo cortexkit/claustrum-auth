@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import {
   type ClaustrumScopedClient,
@@ -9,6 +9,7 @@ import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
 import type { PluginInput } from '@opencode-ai/plugin'
 import { harness, row } from '../../core/test/fakes.ts'
 import { createTestCore, fixtureEntries } from '../../core/test-entry.ts'
+import { opencodeStateDir } from '../src/state-dir.ts'
 import type { AuthApi } from '../src/v1/activation.ts'
 import { providerFetch } from '../src/v1/fetch.ts'
 import { placeholderFor } from '../src/v1/placeholder.ts'
@@ -189,8 +190,15 @@ type LooseConfig = {
 async function pluginHarness() {
   const root = scratchRoot()
   await mkdir(root, { recursive: true })
-  const dir = await mkdtemp(path.join(root, 'opencode1-plugin-'))
-  dirs.push(dir)
+  const profile = await mkdtemp(path.join(root, 'opencode1-plugin-'))
+  dirs.push(profile)
+  const configDir = path.join(profile, 'config')
+  const env: Record<string, string> = {
+    OPENCODE_CONFIG_DIR: configDir,
+    XDG_STATE_HOME: path.join(profile, 'state'),
+  }
+  await mkdir(configDir)
+  const dir = await opencodeStateDir(env)
   const reads: string[] = []
   const client: ClaustrumScopedClient = {
     async listScoped() {
@@ -248,19 +256,17 @@ async function pluginHarness() {
     },
     serverUrl: new URL('http://127.0.0.1:1'),
   } as unknown as PluginInput
-  const env: Record<string, string> = {}
   await writeJsonAtomic(
     hostEnrollmentPaths({ stateDir: dir, host: 'opencode' }).tokenPath,
     { token: '01'.repeat(32), token_generation: 1 },
   )
-  const hooks = opencode1Hosts(
+  const hooks = await opencode1Hosts(
     {
       table: fixtureEntries,
       createCore: (options) => {
         const core = createTestCore(options)
         return core
       },
-      stateDir: () => dir,
       connect: async () => client,
       isCustodyActive: async () => true,
       authApi: () => authApi,
@@ -269,7 +275,7 @@ async function pluginHarness() {
     },
     input,
   )
-  return { hooks, stored, writes, shown, reads, env, dir }
+  return { hooks, stored, writes, shown, reads, env, dir, configDir }
 }
 
 test('the config hook wraps every listed provider, keeps an earlier fetch and registers the command', async () => {
@@ -355,4 +361,5 @@ test('the command hook runs use and release and ignores other commands', async (
   expect(h.shown.at(-1)).toContain('not a provider')
   expect(h.writes).toEqual([`set ${P}`, `remove ${P}`])
   await h.hooks.dispose?.()
+  expect(await readdir(h.configDir)).toEqual([])
 })
