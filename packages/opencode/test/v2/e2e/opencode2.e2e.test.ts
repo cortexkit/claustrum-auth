@@ -330,6 +330,37 @@ class Scenario {
     return name ? all.filter((entry) => entry.event === name) : all
   }
 
+  /**
+   * Waits, within bounds, until the plugin log holds an entry for `name`.
+   * The plugin runs in the host server process and records to a file this
+   * process reads back, so the write can become visible after the CLI that
+   * triggered it has already exited (seen on Windows, where a login had
+   * returned but no `registered` entry could be read yet). A read right
+   * after a login or turn must wait here instead of asserting at once.
+   */
+  async waitForEvent(name: string, ms = 10_000): Promise<PluginEvent[]> {
+    let lastError: unknown
+    const deadline = Date.now() + ms
+    for (;;) {
+      try {
+        const found = this.events(name)
+        if (found.length) return found
+      } catch (error) {
+        // The server may be mid-append, or Windows may refuse a live read
+        // briefly; keep polling until the bound, then report.
+        lastError = error
+      }
+      if (Date.now() >= deadline)
+        throw new Error(
+          `the plugin log never recorded event "${name}" within ${ms} ms` +
+            (lastError === undefined
+              ? ''
+              : `: last read failed with ${String(lastError)}`),
+        )
+      await Bun.sleep(100)
+    }
+  }
+
   wire(
     filter: { server?: 'mock' | 'other'; kind?: string; path?: RegExp } = {},
   ) {
@@ -728,7 +759,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
           }),
         ])
       }
-      expect(run.events('registered').at(-1)?.providers).toEqual([
+      expect((await run.waitForEvent('registered')).at(-1)?.providers).toEqual([
         'fixture-a',
         'fixture-b',
         'fixture-c',
@@ -938,9 +969,9 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         const { vault } = run
         // Registered while the vault was down; activation needs no restart.
         const down = await run.login('fixture-a')
-        expect(run.events('registered').at(-1)?.providers).toContain(
-          'fixture-a',
-        )
+        expect(
+          (await run.waitForEvent('registered')).at(-1)?.providers,
+        ).toContain('fixture-a')
         expect(down.exit).not.toBe(0)
         expect(down.output).toContain(
           'the Claustrum vault could not be reached',
@@ -1152,7 +1183,9 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
       const log: Record<string, unknown> = {}
 
       expect((await run.login('xai')).exit).toBe(0)
-      expect(run.events('registered').at(-1)?.providers).toContain('xai')
+      expect(
+        (await run.waitForEvent('registered')).at(-1)?.providers,
+      ).toContain('xai')
 
       // An owned turn goes over the socket: the vault key in the handshake's
       // Authorization, written in the handshake hook over the placeholder the
