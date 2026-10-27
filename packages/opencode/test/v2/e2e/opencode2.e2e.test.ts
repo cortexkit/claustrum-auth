@@ -17,12 +17,13 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import { buildPlugin } from './build-plugin.ts'
+import { removeProfile } from './cleanup.ts'
 import {
   describeConfig,
   describeHosts,
@@ -195,11 +196,10 @@ class Scenario {
       env: this.env,
     })
     this.hosts.push(host)
-    const finished = await within(
-      Promise.all([host.child.exited, host.drained]),
-      120_000,
-    )
-    if (!finished) await stopHost(host)
+    await within(host.child.exited, 120_000)
+    // A successful CLI exit does not mean its installers or watchers exited.
+    const problems = await stopHost(host)
+    if (problems.length) throw new Error(problems.join('; '))
     const output = `${host.stdout.join('')}${host.stderr.join('')}`
     return { exit: host.child.exitCode, output }
   }
@@ -361,12 +361,7 @@ class Scenario {
   }
 
   async remove() {
-    await rm(this.root, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 200,
-    })
+    await removeProfile(this.root, this.hosts)
   }
 }
 
@@ -412,7 +407,14 @@ async function scenario(
   }
   if (failure) {
     console.error(run.describe())
-    await run.remove().catch(() => {})
+    try {
+      await run.remove()
+    } catch (cleanup) {
+      throw new AggregateError(
+        [failure, cleanup],
+        `scenario and cleanup failed: ${String(cleanup)}`,
+      )
+    }
     throw failure
   }
   await run.remove()
@@ -484,26 +486,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
 
   afterAll(async () => {
     if (!scratch) return
-    // The CLI install holds thousands of files; on Windows the last host
-    // may release them a moment after it exits. A leftover temp folder
-    // must not fail the suite: the runner reclaims its temp anyway.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await rm(scratch, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 200,
-        })
-        return
-      } catch (error) {
-        if (attempt >= 3) {
-          console.warn(`cleanup: could not remove ${scratch}: ${error}`)
-          return
-        }
-        await Bun.sleep(1000)
-      }
-    }
+    await removeProfile(scratch, [])
   })
 
   test('the isolated profile resolves home inside the scratch root on every OS', () => {

@@ -5,13 +5,15 @@
 //
 // On Windows npm's `opencode2.cmd` starts the native executable as a child of
 // cmd.exe, and Bun's `kill()` ends only cmd.exe; the orphan keeps the output
-// pipes and the test profile open. `taskkill /T /F` ends the whole tree.
+// pipes and the test profile open. Track descendants before their parents
+// exit; taskkill cannot reconstruct the tree from an already-exited root.
 // Every wait is bounded, so a process that outlives its stop fails the
 // scenario with a report instead of hanging it.
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { createServer } from 'node:net'
 import path from 'node:path'
+import { WindowsProcessTree } from './windows-processes.ts'
 
 export const isWindows = process.platform === 'win32'
 
@@ -43,6 +45,7 @@ export interface HostProcess {
   readonly stdout: string[]
   readonly stderr: string[]
   readonly drained: Promise<void>
+  readonly tree?: WindowsProcessTree
   outputClosed: boolean
 }
 
@@ -61,6 +64,7 @@ export function spawnHost(
   argv: [string, ...string[]],
   options: { cwd: string; env: Record<string, string> },
 ): HostProcess {
+  const started = Date.now()
   const child = Bun.spawn(argv, {
     cwd: options.cwd,
     env: options.env,
@@ -77,6 +81,14 @@ export function spawnHost(
     child,
     stdout,
     stderr,
+    tree: isWindows
+      ? new WindowsProcessTree(
+          child.pid,
+          undefined,
+          started,
+          () => child.exitCode === null && child.signalCode === null,
+        )
+      : undefined,
     outputClosed: false,
     drained: Promise.all([
       collect(child.stdout, stdout),
@@ -90,6 +102,7 @@ export function spawnHost(
       },
     ),
   }
+  host.tree?.start()
   return host
 }
 
@@ -124,6 +137,12 @@ export function killTree(pid: number) {
 export async function stopHost(host: HostProcess) {
   const { child } = host
   const problems: string[] = []
+  if (host.tree)
+    problems.push(
+      ...(await host.tree.stop(killTree)).map(
+        (problem) => `${host.name}: ${problem}`,
+      ),
+    )
   if (child.exitCode === null && child.signalCode === null) {
     if (isWindows) killTree(child.pid)
     else {
