@@ -108,10 +108,7 @@ const vaultRows: {
     providerIds: ['xai'],
     credentialType: 'oauth',
     categories: ['llm-provider', 'xai-native'],
-    expected: (host) =>
-      host === 'opencode2'
-        ? { kind: 'refused', code: 'not-on-this-host' }
-        : { kind: 'mine', member: 'xai' },
+    expected: () => ({ kind: 'mine', member: 'xai' }),
   },
   {
     credential: 'apikey:opencode-go',
@@ -161,6 +158,15 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     for (const origin of entry.origins)
       expect(new URL(origin).protocol).toBe('https:')
   }
+  // Only xAI is sent over a WebSocket (OpenCode 2's xAI driver), and only to
+  // its own API host over TLS.
+  expect(
+    Object.fromEntries(
+      supportedProviders.flatMap((entry) =>
+        entry.handshakeOrigins ? [[entry.service, entry.handshakeOrigins]] : [],
+      ),
+    ),
+  ).toEqual({ xai: ['wss://api.x.ai'] })
   const hostIds = (host: Host) =>
     Object.fromEntries(
       supportedProviders.flatMap((entry) =>
@@ -181,9 +187,9 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     'opencode-go': 'opencode-go',
     'opencode-zen': 'opencode',
   })
-  // xAI waits for its WebSocket handshake proof, and OpenCode Zen's stored
-  // credential is read by the host's Console plugin outside the request hooks.
-  const { xai: _xai, 'opencode-zen': _zen, ...opencode2 } = hostIds('opencode1')
+  // OpenCode Zen's stored credential is read by the host's Console plugin
+  // outside the request hooks.
+  const { 'opencode-zen': _zen, ...opencode2 } = hostIds('opencode1')
   expect(hostIds('opencode2')).toEqual(opencode2)
   // Pi registers a provider only through pi-ai's bearer apis, so the services
   // Pi's own catalog does not offer as bearer providers are OpenCode only.

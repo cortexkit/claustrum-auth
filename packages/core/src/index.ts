@@ -15,6 +15,7 @@ export { menuUsage, vaultMenuText } from './menu.js'
 export { command, opencodeEnrollment, piEnrollment, pluginId } from './names.js'
 export {
   ClaustrumAuthError,
+  checkHandshakeOrigin,
   checkOrigin,
   checkPlacement,
   redactError,

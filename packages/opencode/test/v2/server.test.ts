@@ -82,10 +82,13 @@ test('registers the login method and a gated installation for every supported pr
     `fixture-b:${vaultMethodId}`,
     `fixture-c:${vaultMethodId}`,
   ])
-  // One gated installation per provider, each scoped to its id.
-  expect(
-    (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
-  ).toEqual(['fixture-a', 'fixture-b', 'fixture-c'])
+  // One gated installation per provider, each scoped to its id (the plugin's
+  // own request hook sits beside each).
+  expect([
+    ...new Set(
+      (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
+    ),
+  ]).toEqual(['fixture-a', 'fixture-b', 'fixture-c'])
   expect(vault.connects).toBe(0)
   // Activation works without a restart once the vault answers.
   await expect(login(host, 'fixture-a')).rejects.toThrow('could not be reached')
@@ -353,3 +356,167 @@ test('rows vanishing while owned refuse locally and send nothing', async () => {
   // Two sign-ins and a roster change, each writing owner-only files for real:
   // on Windows that takes the access-list path and runs past Bun's 5 s default.
 }, 20_000)
+
+// WebSocket handshakes: fixture-a may be sent over a socket to
+// wss://fixture.invalid; the other fixtures have no handshake origin.
+const socketTable = table.map((entry) =>
+  entry.service === 'fixture-a'
+    ? { ...entry, handshakeOrigins: ['wss://fixture.invalid'] }
+    : entry,
+)
+const socketURL = 'wss://fixture.invalid/v1/responses'
+
+function handshake(
+  host: FakeHost,
+  provider: string,
+  url: string,
+  s = scope(provider),
+  headers: Record<string, string> = bearer(provider),
+) {
+  return trigger(host, 'experimental.ws.handshake', {
+    ...s,
+    url,
+    headers: { ...headers },
+  })
+}
+
+function receive(host: FakeHost, s: ReturnType<typeof scope>, frame: string) {
+  return trigger(host, 'experimental.ws.receive', { ...s, frame })
+}
+
+test('an owned handshake is served in order: origin, authorize, Authorization; error frames reach the host without the key', async () => {
+  const { host, vault } = await startServer({ table: socketTable })
+  await login(host, 'fixture-a')
+  const s = scope('fixture-a')
+  const draft = await handshake(host, 'fixture-a', socketURL, s, {
+    ...bearer('fixture-a'),
+    'x-extra': 'kept',
+  })
+  expect(draft.url).toBe(socketURL)
+  expect(draft.headers).toEqual({
+    authorization: 'Bearer secret-a1-1',
+    'x-extra': 'kept',
+  })
+  expect(vault.reads).toEqual(['a1'])
+  const echoed = await receive(
+    host,
+    s,
+    JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { message: 'bad key secret-a1-1' },
+    }),
+  )
+  expect(echoed.frame).toContain('bad key')
+  expect(echoed.frame).not.toContain('secret-a1-1')
+  const delta = '{"type":"response.output_text.delta","delta":"hi"}'
+  expect((await receive(host, s, delta)).frame).toBe(delta)
+})
+
+test('a handshake to another origin, or for a provider without handshake origins, is refused before any vault read', async () => {
+  const { host, vault } = await startServer({
+    table: socketTable,
+    rows: [row('a1'), row('b1', { providerIds: ['fixture-b'] })],
+  })
+  await login(host, 'fixture-a')
+  await login(host, 'fixture-b')
+  for (const url of [
+    'wss://elsewhere.invalid/v1/responses',
+    'ws://fixture.invalid/v1/responses',
+    'wss://fixture.invalid:444/v1/responses',
+    'https://fixture.invalid/v1/responses',
+    'wss://user:pass@fixture.invalid/v1/responses',
+  ])
+    await expect(handshake(host, 'fixture-a', url)).rejects.toThrow(
+      'the vault key for fixture-a is only sent over WebSocket to wss://fixture.invalid',
+    )
+  await expect(
+    handshake(host, 'fixture-b', 'wss://fixture.invalid/v1'),
+  ).rejects.toThrow('the vault key for fixture-b is never sent over WebSocket')
+  expect(vault.reads).toEqual([])
+  // A handshake that passed the origin check but was refused afterwards
+  // (here: the placeholder in a second header) leaves nothing an HTTP
+  // request of the same session could use to read before its own check.
+  const s = scope('fixture-a')
+  await expect(
+    handshake(host, 'fixture-a', socketURL, s, {
+      ...bearer('fixture-a'),
+      'x-api-key': placeholderSecret('fixture-a'),
+    }),
+  ).rejects.toThrow('more than one header')
+  await expect(
+    send(
+      host,
+      'fixture-a',
+      post('https://elsewhere.invalid/v1', bearer('fixture-a')),
+      s,
+    ),
+  ).rejects.toThrow('is only sent to')
+  expect(vault.reads).toEqual([])
+  // A foreign handshake passes untouched.
+  const foreign = await handshake(
+    host,
+    'fixture-a',
+    'wss://elsewhere.invalid/v1',
+    scope('fixture-a'),
+    { authorization: 'Bearer user-key' },
+  )
+  expect(foreign.headers).toEqual({ authorization: 'Bearer user-key' })
+  expect(vault.reads).toEqual([])
+})
+
+test('a handshake URL moved after the origin check is refused, and the key never enters the handshake', async () => {
+  const { host, vault } = await startServer({ table: socketTable })
+  await login(host, 'fixture-a')
+  // Another plugin's hook between the plugin's check and the installer.
+  const hooks = host.hooks.get('experimental.ws.handshake') ?? []
+  const draft = {
+    ...scope('fixture-a'),
+    url: socketURL,
+    headers: bearer('fixture-a') as Record<string, string>,
+  }
+  hooks.splice(1, 0, {
+    callback: ((moved: typeof draft) => {
+      moved.url = 'wss://elsewhere.invalid/v1/responses'
+    }) as never,
+    providerID: 'fixture-a',
+  })
+  await expect(
+    trigger(host, 'experimental.ws.handshake', draft),
+  ).rejects.toThrow('is only sent over WebSocket to wss://fixture.invalid')
+  expect(draft.headers.authorization).toBe(
+    `Bearer ${placeholderSecret('fixture-a')}`,
+  )
+  // The read already happened for the URL that was checked.
+  expect(vault.reads).toEqual(['a1'])
+})
+
+test('a 429 error frame marks the account and the next handshake goes to the next one; a 401 error frame is reported once', async () => {
+  const { host, vault } = await startServer({
+    table: socketTable,
+    rows: [row('a1'), row('a2')],
+  })
+  await login(host, 'fixture-a')
+  vault.version = 5
+  const first = scope('fixture-a')
+  const opened = await handshake(host, 'fixture-a', socketURL, first)
+  expect(opened.headers.authorization).toBe('Bearer secret-a1-5')
+  await receive(
+    host,
+    first,
+    '{"type":"error","status":429,"error":{"code":"rate_limit_exceeded","message":"slow down"}}',
+  )
+  await Bun.sleep(10)
+  const second = scope('fixture-a')
+  const moved = await handshake(host, 'fixture-a', socketURL, second)
+  expect(moved.headers.authorization).toBe('Bearer secret-a2-5')
+  await receive(
+    host,
+    second,
+    '{"type":"error","status":401,"error":{"message":"bad key"}}',
+  )
+  await Bun.sleep(10)
+  expect(vault.reports).toEqual([
+    expect.objectContaining({ credentialId: 'a2', recordVersion: 5 }),
+  ])
+})

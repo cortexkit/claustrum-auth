@@ -47,16 +47,19 @@ test('the published entry registers the shipped providers, and no fixture provid
   expect([...host.methods.keys()].sort()).toEqual(
     expected.map((id) => `${id}:${vaultMethodId}`).sort(),
   )
-  expect(
-    (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
-  ).toEqual(expected)
+  expect([
+    ...new Set(
+      (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
+    ),
+  ]).toEqual(expected)
   expect(expected.some((id) => id.startsWith('fixture-'))).toBe(false)
 })
 
-test('xai and opencode-zen get no login method on OpenCode 2 even when the host knows them', async () => {
-  // OpenCode 2 sends xAI's key in a WebSocket handshake by default, and its
-  // Console plugin reads the stored `opencode` credential outside the request
-  // hooks, so neither is served here although the vault holds both rows.
+test('opencode-zen gets no login method on OpenCode 2 even when the host knows it; xai does', async () => {
+  // OpenCode 2's Console plugin reads the stored `opencode` credential
+  // outside the request hooks, so OpenCode Zen is not served here although
+  // the vault holds its row. xAI is served, over HTTP and over its WebSocket
+  // handshake.
   const xai = supportedProviders.find((entry) => entry.service === 'xai')
   const zen = supportedProviders.find(
     (entry) => entry.service === 'opencode-zen',
@@ -64,22 +67,47 @@ test('xai and opencode-zen get no login method on OpenCode 2 even when the host 
   if (!xai || !zen) throw new Error('missing batch 2 entries')
   const { host } = await startServer({
     rows: [vaultRowFor(xai), vaultRowFor(zen)],
-    catalog: [
-      ...opencode2Catalog(supportedProviders),
-      { id: 'xai' },
-      { id: 'opencode' },
-    ],
+    catalog: [...opencode2Catalog(supportedProviders), { id: 'opencode' }],
     table: supportedProviders,
   })
-  for (const id of ['xai', 'opencode']) {
-    expect(host.methods.has(`${id}:${vaultMethodId}`)).toBe(false)
-    expect(
-      (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
-    ).not.toContain(id)
-  }
-  // Meta and OpenCode Go do register login methods on OpenCode 2.
-  for (const id of ['meta', 'opencode-go'])
+  expect(host.methods.has(`opencode:${vaultMethodId}`)).toBe(false)
+  expect(
+    (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
+  ).not.toContain('opencode')
+  // Meta, OpenCode Go and xAI do register login methods on OpenCode 2.
+  for (const id of ['meta', 'opencode-go', 'xai'])
     expect(host.methods.has(`${id}:${vaultMethodId}`)).toBe(true)
+})
+
+test('xai is served into its WebSocket handshake to wss://api.x.ai only, and a lookalike handshake origin is refused before the read', async () => {
+  const xai = supportedProviders.find((entry) => entry.service === 'xai')
+  if (!xai) throw new Error('missing xai entry')
+  const vaultRow = vaultRowFor(xai)
+  const { host, vault } = await startServer({
+    rows: [vaultRow],
+    catalog: opencode2Catalog(supportedProviders),
+    table: supportedProviders,
+  })
+  await login(host, 'xai')
+  const handshake = (url: string) =>
+    trigger(host, 'experimental.ws.handshake', {
+      ...scope('xai'),
+      url,
+      headers: { ...bearer('xai') },
+    })
+  const served = await handshake('wss://api.x.ai/v1/responses')
+  expect(served.headers.authorization).toBe(`Bearer secret-${vaultRow.id}-1`)
+  expect(vault.reads).toEqual([vaultRow.id])
+  for (const lookalike of [
+    'wss://api.x.ai.example/v1/responses',
+    'wss://api.x.ai:8443/v1/responses',
+    'ws://api.x.ai/v1/responses',
+    'https://api.x.ai/v1/responses',
+  ])
+    await expect(handshake(lookalike)).rejects.toThrow(
+      'is only sent over WebSocket to wss://api.x.ai',
+    )
+  expect(vault.reads).toEqual([vaultRow.id])
 })
 
 // One test per provider: each starts a server that writes owner-only files,

@@ -17,6 +17,12 @@ export interface ProviderEntry {
   credentialIds?: readonly string[]
   class: ProviderClass
   origins: readonly string[]
+  // Origins a WebSocket handshake may carry the key to (`wss` only), on hosts
+  // whose driver opens a socket for this provider: today only OpenCode 2's
+  // xAI driver. Kept apart from `origins` so an HTTP request is never allowed
+  // to a socket origin, nor a handshake to an HTTP one. Absent: every owned
+  // handshake of the provider is refused before any vault read.
+  handshakeOrigins?: readonly string[]
   accountPath?: readonly string[]
 }
 export interface HostFacts {
@@ -137,14 +143,17 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.meta.ai'],
   },
   {
-    // Not on OpenCode 2: its xAI provider sends the key in a WebSocket
-    // handshake by default, which needs its own proof (design section 7.4).
-    // OpenCode 1 and Pi send xAI requests over HTTP through the plugin's fetch.
+    // OpenCode 1 and Pi send xAI requests over HTTP through the plugin's
+    // fetch. OpenCode 2's built-in xAI plugin opens a WebSocket by default,
+    // so there the key also goes into the handshake to `wss://api.x.ai`
+    // (docs/providers.md, "xAI on OpenCode 2"); the HTTP fallback the host
+    // takes after a failed handshake is served like any other request.
     service: 'xai',
     ids: ['xai'],
-    hosts: { opencode1: 'xai', pi: 'xai' },
+    hosts: { opencode1: 'xai', opencode2: 'xai', pi: 'xai' },
     class: 'A',
     origins: ['https://api.x.ai'],
+    handshakeOrigins: ['wss://api.x.ai'],
   },
   {
     // Each model picks its own driver. Only models whose driver sends the key

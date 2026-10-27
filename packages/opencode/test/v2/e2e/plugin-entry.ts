@@ -80,6 +80,16 @@ export const table: readonly ProviderEntry[] = [
   },
   classA('fixture-h'),
   classA('fixture-o'),
+  // The host's own xAI provider, whose base URL the test points at the mock:
+  // its built-in plugin sends it over a WebSocket to `<base>/responses`.
+  {
+    service: 'xai',
+    ids: ['xai'],
+    hosts: { opencode2: 'xai' },
+    class: 'A',
+    origins: [ORIGIN],
+    handshakeOrigins: [ORIGIN.replace(/^http/u, 'ws')],
+  },
 ]
 
 async function call(op: string, body: Record<string, unknown> = {}) {
@@ -166,6 +176,23 @@ const plugin = {
               kind: draft.kind,
               placeholderIn: carries(
                 draft.request.headers,
+                placeholderSecret(provider),
+              ),
+            })
+          },
+          { providerID: provider },
+        ),
+      )
+      observers.push(
+        await ctx.session.hook(
+          'experimental.ws.handshake',
+          (draft) => {
+            log('handshake', {
+              provider,
+              sessionID: draft.sessionID,
+              kind: draft.kind,
+              placeholderIn: carries(
+                new Headers(draft.headers),
                 placeholderSecret(provider),
               ),
             })

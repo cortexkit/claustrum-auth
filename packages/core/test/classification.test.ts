@@ -95,7 +95,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
       value: fact([id]),
       expected: (host) => {
         if (
-          (host === 'opencode2' && ['xai', 'opencode'].includes(id)) ||
+          (host === 'opencode2' && id === 'opencode') ||
           (host === 'pi' &&
             ['cline-pass', 'inception', 'typesafe'].includes(id))
         )

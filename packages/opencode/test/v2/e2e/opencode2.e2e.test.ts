@@ -75,6 +75,7 @@ type PluginEvent = { seq: number; at: number; event: string } & Record<
 function providerConfig(
   mock: MockProvider,
   extra: Record<string, object> = {},
+  xaiURL = mock.url,
 ) {
   const chat = (baseURL: string, more: object = {}) => ({
     package: '@ai-sdk/openai-compatible',
@@ -96,6 +97,13 @@ function providerConfig(
       headers: { 'x-api-key': placeholderSecret('fixture-h') },
     }),
     'fixture-o': chat(`${mock.otherURL}/v1`),
+    // The host's own xAI provider, moved to a loopback origin. Its built-in
+    // plugin keeps the WebSocket transport, so turns open
+    // `ws://<origin>/v1/responses`.
+    xai: {
+      settings: { baseURL: `${xaiURL}/v1` },
+      models: { 'mock-model': { name: 'Mock model' } },
+    },
     ...extra,
   }
 }
@@ -115,6 +123,7 @@ class Scenario {
     root: string,
     readonly mock: MockProvider,
     readonly vault: FakeVault,
+    xaiOrigin: 'mock' | 'other',
   ) {
     this.root = root
     this.project = path.join(root, 'project')
@@ -135,7 +144,11 @@ class Scenario {
     // The host accepts local plugins as file URLs on every OS.
     const config = {
       plugins: [pathToFileURL(pluginDir).href],
-      providers: providerConfig(mock),
+      providers: providerConfig(
+        mock,
+        {},
+        xaiOrigin === 'mock' ? mock.url : mock.otherURL,
+      ),
     }
     const dir = path.join(this.env.XDG_CONFIG_HOME, 'opencode')
     mkdirSync(dir, { recursive: true })
@@ -143,7 +156,10 @@ class Scenario {
     writeFileSync(this.configFile, JSON.stringify(config, null, 2))
   }
 
-  static async create(rows: VaultRow[], options: { offline?: boolean } = {}) {
+  static async create(
+    rows: VaultRow[],
+    options: { offline?: boolean; xaiOrigin?: 'mock' | 'other' } = {},
+  ) {
     // The host's real spelling of the folder. The CLI processes report their
     // working folder by its real path (macOS temp is /var/..., really
     // /private/var/...), and the host sets the plugin up once per project
@@ -154,7 +170,12 @@ class Scenario {
     )
     const vault = startFakeVault(rows)
     vault.offline = options.offline ?? false
-    return new Scenario(root, await startMockProvider(), vault)
+    return new Scenario(
+      root,
+      await startMockProvider(),
+      vault,
+      options.xaiOrigin ?? 'mock',
+    )
   }
 
   async start() {
@@ -400,6 +421,7 @@ async function scenario(
   body: (run: Scenario) => Promise<void>,
   options: {
     offline?: boolean
+    xaiOrigin?: 'mock' | 'other'
     beforeStart?(run: Scenario): Promise<void>
   } = {},
 ) {
@@ -697,6 +719,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         'fixture-c',
         'fixture-h',
         'fixture-o',
+        'xai',
       ])
       // A reserved provider never gets the vault method.
       expect((await run.login('openai')).exit).not.toBe(0)
@@ -1073,6 +1096,269 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
       expect(vault.reads.length).toBeGreaterThan(0)
       run.mustNotLeak(...rows.map((row) => vault.secret(row.id)))
     })
+  }, 600_000)
+
+  test('xAI over the WebSocket handshake: the key in the handshake only, a read per send, frame limits and reports, redaction, sticky HTTP fallback, login switch and revocation on an open socket, the handshake redirect proof with controls', async () => {
+    const rows: VaultRow[] = [
+      { id: 'x1', providerIds: ['xai'] },
+      { id: 'x2', providerIds: ['xai'] },
+    ]
+    await scenario(rows, async (run) => {
+      const { vault, mock } = run
+      const secrets = rows.map((row) => vault.secret(row.id))
+      const bearers = secrets.map((secret) => `Bearer ${secret}`)
+      const served = (record: { authorization: string | null }) =>
+        bearers.includes(record.authorization ?? '')
+      const upgrades = () => run.wire({ kind: 'handshake' })
+      const socketTurns = () =>
+        mock.records.filter(
+          (record) => record.transport === 'ws' && record.kind === 'primary',
+        )
+      const httpTurns = () =>
+        mock.records.filter(
+          (record) =>
+            record.transport === undefined &&
+            record.kind === 'primary' &&
+            record.path.endsWith('/responses'),
+        )
+      // One vault read per send: per handshake hook call that carried the
+      // placeholder, and per owned HTTP request.
+      const sends = () =>
+        run
+          .events()
+          .filter(
+            (entry) =>
+              entry.provider === 'xai' &&
+              (entry.event === 'handshake' || entry.event === 'transport') &&
+              Array.isArray(entry.placeholderIn) &&
+              entry.placeholderIn.length > 0,
+          ).length
+      const reads = () => vault.reads.filter((id) => id.startsWith('x')).length
+      const log: Record<string, unknown> = {}
+
+      expect((await run.login('xai')).exit).toBe(0)
+      expect(run.events('registered').at(-1)?.providers).toContain('xai')
+
+      // An owned turn goes over the socket: the vault key in the handshake's
+      // Authorization, written in the handshake hook over the placeholder the
+      // host put there.
+      const first = await run.turn('xai')
+      expect(first.exit).toBe(0)
+      expect(first.output).toContain('MOCK-WS-REPLY')
+      expect(upgrades().map((record) => record.authorization)).toEqual([
+        bearers[0],
+      ])
+      expect(socketTurns().map((record) => record.socket)).toEqual([
+        upgrades()[0]?.socket,
+      ])
+      expect(
+        run
+          .events('handshake')
+          .filter((entry) => entry.provider === 'xai')
+          .map((entry) => entry.placeholderIn),
+      ).toContainEqual(['authorization'])
+      expect(reads()).toBe(sends())
+
+      // The same session again: the host runs the handshake hook for every
+      // model call, so the vault is read for every send; the key is the same,
+      // so the open socket is reused without a new handshake.
+      const opened = upgrades().length
+      const before = reads()
+      expect((await run.turn('xai', { continue: true })).exit).toBe(0)
+      expect(reads()).toBeGreaterThan(before)
+      expect(reads()).toBe(sends())
+      log.reuse = {
+        upgrades: upgrades().length - opened,
+        sockets: socketTurns().map((record) => record.socket),
+      }
+      expect(upgrades().length).toBe(opened)
+      expect(new Set(socketTurns().map((record) => record.socket)).size).toBe(1)
+
+      // A 429 error frame is a limit on that account: the turn moves to the
+      // next account, on a new socket, since its handshake key differs.
+      mock.nextFrame({ type: 'status', status: 429 })
+      const limited = socketTurns().length
+      expect((await run.turn('xai')).exit).toBe(0)
+      expect(
+        socketTurns()
+          .slice(limited)
+          .map((record) => record.authorization),
+      ).toEqual([bearers[0], bearers[1]])
+      expect(
+        run.events('limit').filter((entry) => entry.provider === 'xai'),
+      ).toHaveLength(1)
+      expect(
+        run
+          .events('retry')
+          .filter(
+            (entry) => entry.provider === 'xai' && entry.reason === 'reroute',
+          ),
+      ).toHaveLength(1)
+
+      // A 401 error frame is reported once, for the receipt that handshake
+      // was served (x2, since x1 is marked), with its record version.
+      vault.version = 4
+      mock.nextFrame({ type: 'status', status: 401 })
+      await run.turn('xai')
+      await Bun.sleep(500)
+      expect(vault.reports).toEqual([
+        { credentialId: 'x2', providerStatus: 401, recordVersion: 4 },
+      ])
+
+      // An error frame echoing the key reaches the host without it.
+      mock.nextFrame({ type: 'echo-error' })
+      const echoed = await run.turn('xai')
+      expect(echoed.output).toContain('invalid key')
+      for (const secret of secrets) expect(echoed.output).not.toContain(secret)
+
+      // A handshake refused with 401: no hook sees a handshake's status, and
+      // the host falls back to HTTP for this session for good. The HTTP
+      // request is served after its own origin check, and its 401 is the one
+      // report. The next turn of the session skips the socket.
+      mock.nextHandshake({ type: 'status', status: 401 })
+      mock.next({ type: 'status', status: 401 })
+      const refusedUpgrades = upgrades().length
+      const http = httpTurns().length
+      await run.turn('xai')
+      await Bun.sleep(500)
+      expect(
+        upgrades()
+          .slice(refusedUpgrades)
+          .map((r) => r.behavior),
+      ).toEqual(['status'])
+      expect(httpTurns().slice(http).every(served)).toBe(true)
+      expect(httpTurns().length).toBe(http + 1)
+      expect(vault.reports).toHaveLength(2)
+      expect(vault.reports[1]).toMatchObject({ providerStatus: 401 })
+      const sticky = upgrades().length
+      expect((await run.turn('xai', { continue: true })).exit).toBe(0)
+      expect(upgrades().length).toBe(sticky)
+      expect(httpTurns().length).toBe(http + 2)
+      expect(reads()).toBe(sends())
+
+      // The handshake redirect proof. Every redirect status to the second
+      // origin, each in its own session (a failed handshake moves a session
+      // to HTTP), then a same-origin redirect.
+      const statuses = [301, 302, 303, 307, 308]
+      const redirected = upgrades().length
+      for (const status of statuses) {
+        mock.nextHandshake({
+          type: 'redirect',
+          status,
+          location: () => `${mock.otherURL}/v1/responses`,
+        })
+        expect((await run.turn('xai')).exit).toBe(0)
+      }
+      mock.nextHandshake({
+        type: 'redirect',
+        status: 307,
+        location: () => `${mock.url}/v1/same-origin/responses`,
+      })
+      expect((await run.turn('xai')).exit).toBe(0)
+      const answered = upgrades().slice(redirected)
+      // Each redirect was answered to a handshake that carried the key.
+      expect(answered.map((record) => record.behavior)).toEqual(
+        [...statuses, 307].map(() => 'redirect'),
+      )
+      expect(answered.every(served)).toBe(true)
+      // The second origin never received the key, in any header.
+      expect(
+        run
+          .wire({ server: 'other' })
+          .filter((record) =>
+            record.headers.some(([, value]) =>
+              secrets.some((secret) => value.includes(secret)),
+            ),
+          ),
+      ).toEqual([])
+      // Control: the host's WebSocket client does not follow a handshake
+      // redirect at all on 2.0.32, not even to the same origin, so the zero
+      // above is not a redirect stripping the header: nothing is followed.
+      // The second origin's own recorder is shown to catch a handshake key
+      // in the wrong-origin scenario below.
+      expect(run.wire({ path: /same-origin/ })).toEqual([])
+      expect(run.wire({ server: 'other' })).toEqual([])
+
+      // A login switch reaches an open socket on the next send: the user's
+      // key changes the handshake, so the host opens a new socket with it,
+      // with no vault read. Switching back serves the vault key again.
+      expect((await run.turn('xai')).exit).toBe(0)
+      const owned = upgrades().length
+      await run.useKey('xai', 'user-key-own')
+      const quiet = reads()
+      expect((await run.turn('xai', { continue: true })).exit).toBe(0)
+      expect(
+        upgrades()
+          .slice(owned)
+          .map((r) => r.authorization),
+      ).toEqual(['Bearer user-key-own'])
+      expect(reads()).toBe(quiet)
+      expect((await run.login('xai')).exit).toBe(0)
+      expect((await run.turn('xai', { continue: true })).exit).toBe(0)
+      expect(
+        upgrades()
+          .slice(owned + 1)
+          .every(served),
+      ).toBe(true)
+      expect(upgrades().length).toBe(owned + 2)
+
+      // Revoking vault mode stops the open socket on the next send: it is
+      // refused locally, and nothing reaches the socket.
+      vault.mode = 'local'
+      const silent = mock.records.length
+      const revoked = await run.turn('xai', { continue: true })
+      log.revoked = revoked.output
+        .split('\n')
+        .filter((line) => line.includes('"type":"error"'))
+        .map((line) => line.slice(0, 400))
+      expect(revoked.output).toContain('"type":"error"')
+      expect(run.server?.stderr.join('')).toContain('vault mode is off')
+      expect(mock.records.slice(silent)).toEqual([])
+      vault.mode = 'vault'
+
+      console.log(`XAI-WEBSOCKET: ${JSON.stringify(log)}`)
+      expect(onWire(run, placeholderSecret('xai'))).toEqual([])
+      run.mustNotLeak(...secrets)
+    })
+  }, 600_000)
+
+  test('xAI handshake to another origin: refused before any vault read; the second origin records a handshake key when one reaches it', async () => {
+    await scenario(
+      [{ id: 'o1', providerIds: ['xai'] }],
+      async (run) => {
+        const { vault, mock } = run
+        // Control: the user's own key is not the plugin's, so its handshake
+        // goes to the second origin unchanged, and that origin's recorder
+        // shows it. A vault key reaching it would be recorded the same way.
+        await run.useKey('xai', 'user-key-own')
+        expect((await run.turn('xai')).exit).toBe(0)
+        expect(
+          run
+            .wire({ server: 'other', kind: 'handshake' })
+            .map((record) => record.authorization),
+        ).toEqual(['Bearer user-key-own'])
+        expect(vault.reads).toEqual([])
+
+        // Owned: refused in the plugin's handshake hook, before an account is
+        // chosen or the vault read; no handshake leaves, so the host does
+        // not fall back to HTTP either.
+        expect((await run.login('xai')).exit).toBe(0)
+        const sent = mock.records.length
+        const refused = await run.turn('xai')
+        // A handshake hook's error reaches the user as the host's own
+        // "Failed to read xai/xai-responses stream"; the plugin's fixed
+        // refusal is the cause the host logs.
+        expect(refused.output).toContain('"type":"error"')
+        expect(run.server?.stderr.join('')).toContain(
+          `the vault key for xai is only sent over WebSocket to ${mock.url.replace(/^http/u, 'ws')}`,
+        )
+        expect(mock.records.slice(sent)).toEqual([])
+        expect(vault.reads).toEqual([])
+        expect(onWire(run, placeholderSecret('xai'))).toEqual([])
+        run.mustNotLeak(vault.secret('o1'))
+      },
+      { xaiOrigin: 'other' },
+    )
   }, 600_000)
 })
 

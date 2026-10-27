@@ -62,6 +62,19 @@ export function checkOrigin(url: URL, entry: ProviderEntry): void {
     throw new ClaustrumAuthError('origin-refused')
 }
 
+// A WebSocket handshake is checked against the entry's own handshake origins,
+// never its HTTP ones: an entry without any refuses every owned handshake.
+export function checkHandshakeOrigin(url: URL, entry: ProviderEntry): void {
+  if (
+    url.username ||
+    url.password ||
+    !(entry.handshakeOrigins ?? []).some(
+      (origin) => originKey(new URL(origin)) === originKey(url),
+    )
+  )
+    throw new ClaustrumAuthError('origin-refused')
+}
+
 export function checkPlacement(
   url: URL,
   headers: Headers,

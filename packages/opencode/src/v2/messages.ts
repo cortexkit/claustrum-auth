@@ -40,6 +40,16 @@ export function originText(provider: string, origins: readonly string[]) {
   return `claustrum-auth plugin: the vault key for ${provider} is only sent to ${origins.join(', ')}; this request goes to another origin, so it was not sent.`
 }
 
+/** The refusal of an owned WebSocket handshake to an origin not allowed. */
+export function handshakeOriginText(
+  provider: string,
+  origins: readonly string[],
+) {
+  if (origins.length === 0)
+    return `claustrum-auth plugin: the vault key for ${provider} is never sent over WebSocket, so this connection was not opened. Set this provider's transport to http, or switch it back to your own key.`
+  return `claustrum-auth plugin: the vault key for ${provider} is only sent over WebSocket to ${origins.join(', ')}; this connection goes to another origin, so it was not opened.`
+}
+
 type Refusal = ClaustrumAuthError['code']
 
 function refusalText(

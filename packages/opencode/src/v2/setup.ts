@@ -17,7 +17,15 @@ import {
   registerOpenCode2AuthMethods,
 } from '@cortexkit/common-auth/opencode2'
 import type { Plugin } from '@opencode/plugin'
-import { createVaultAdapter, markUntil, type VaultAttempt } from './adapter.ts'
+import {
+  checkOwnedHandshake,
+  createHandshakeState,
+  createVaultAdapter,
+  markUntil,
+  redactFrame,
+  socketKey,
+  type VaultAttempt,
+} from './adapter.ts'
 import {
   noAccountText,
   placementText,
@@ -215,6 +223,37 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
         },
       })
       disposers.push(() => methods.dispose())
+      const handshakes = createHandshakeState()
+      const scoped = { providerID: provider }
+      // Registered before the installer, whose hooks the host runs after
+      // these: an owned handshake's origin is checked here, before any
+      // account is chosen or the vault read; an HTTP request of the same
+      // session clears what an earlier handshake left behind.
+      const handshakeHook = await ctx.session.hook(
+        'experimental.ws.handshake',
+        (draft) => {
+          const refusal = checkOwnedHandshake(
+            handshakes,
+            entry,
+            provider,
+            draft,
+          )
+          if (refusal) {
+            latestRefusal.set(provider, 'origin-refused')
+            throw refusal
+          }
+        },
+        scoped,
+      )
+      disposers.push(() => handshakeHook.dispose())
+      const requestHook = await ctx.session.hook(
+        'http.request',
+        (draft) => {
+          handshakes.pending.delete(socketKey(draft.sessionID, draft.kind))
+        },
+        scoped,
+      )
+      disposers.push(() => requestHook.dispose())
       const installation = await installOpenCode2Auth<never, VaultAttempt>(
         ctx,
         createVaultAdapter({
@@ -225,6 +264,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
           now,
           onError: deps.onError,
           onRefusal: (code) => latestRefusal.set(provider, code),
+          handshakes,
         }),
         {
           gateOnPlaceholder: {
@@ -242,6 +282,21 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
         },
       )
       disposers.push(() => installation.dispose())
+      // Registered after the installer, which reads each frame as the
+      // provider sent it; the host's driver then sees it without the key.
+      const receiveHook = await ctx.session.hook(
+        'experimental.ws.receive',
+        (draft) => {
+          const frame = redactFrame(
+            handshakes,
+            socketKey(draft.sessionID, draft.kind),
+            draft.frame,
+          )
+          if (frame !== draft.frame) draft.frame = frame
+        },
+        scoped,
+      )
+      disposers.push(() => receiveHook.dispose())
       installation.on('limit', (event) => {
         marks.set(event.accountId, markUntil(event.limit, now()))
       })
