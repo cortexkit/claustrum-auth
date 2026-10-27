@@ -2,7 +2,7 @@
 // unit tests. The host fake only does what the installer and the login
 // registration call: hook registration, transforms, the catalog read and an
 // event stream that stays open until disposal.
-import { afterEach } from 'bun:test'
+import { onTestFinished } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
@@ -17,9 +17,47 @@ import { type ServerDeps, setupServer } from '../../src/v2/setup.ts'
 import { scratchRoot } from '../scratch-root.ts'
 
 const cleanup: (() => Promise<unknown>)[] = []
-afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close()
-})
+// Every scratch folder this helper created that has not been removed yet.
+const liveDirs = new Set<string>()
+let armed = false
+
+/**
+ * Runs `close` when the current test finishes, pass or fail.
+ *
+ * `bun test` loads this module once for all the test files of a run, so an
+ * `afterEach` at the top of this file would be attached only to the first
+ * file that imported it, and every later file would leave its scratch
+ * folders behind with its servers undisposed. `onTestFinished` attaches to
+ * whichever test is running, in any file.
+ */
+function afterThisTest(close: () => Promise<unknown>) {
+  if (!armed) {
+    onTestFinished(async () => {
+      armed = false
+      for (const close of cleanup.splice(0).reverse()) await close()
+      const left = [...liveDirs]
+      if (left.length)
+        throw new Error(`scratch folder left behind (${left.join(', ')})`)
+    })
+    armed = true
+    // A scratch folder still present when a test starts outlived the test
+    // that created it: remove it with this test's cleanup, and fail this
+    // test.
+    const leaked = [...liveDirs]
+    if (leaked.length) {
+      cleanup.push(...leaked.map((dir) => () => removeScratch(dir)), close)
+      throw new Error(
+        `scratch folder from an earlier test is still present (${leaked.join(', ')})`,
+      )
+    }
+  }
+  cleanup.push(close)
+}
+
+async function removeScratch(dir: string) {
+  await rm(dir, { recursive: true, force: true })
+  liveDirs.delete(dir)
+}
 
 export const origin = 'https://fixture.invalid'
 
@@ -259,7 +297,10 @@ export async function startServer(
   const scratch = scratchRoot()
   await mkdir(scratch, { recursive: true })
   const dir = await mkdtemp(path.join(scratch, 'opencode2-'))
-  cleanup.push(() => rm(dir, { recursive: true, force: true }))
+  // Arm this test's cleanup before tracking the folder: the leak check
+  // above must not see the folder this test just created.
+  afterThisTest(() => removeScratch(dir))
+  liveDirs.add(dir)
   options.clock?.mark('scratch folder')
   const tokenPath = path.join(dir, 'token.json')
   const writeStarted = performance.now()
@@ -357,7 +398,7 @@ export async function startServer(
   }
   const dispose = await setupServer(host.ctx, deps)
   options.clock?.mark('plugin setup')
-  cleanup.push(async () => {
+  afterThisTest(async () => {
     host.dispose()
     await dispose()
   })
