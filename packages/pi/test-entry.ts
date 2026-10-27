@@ -1,6 +1,5 @@
-// The Pi test build: the real extension over the fixture providers of the
-// design's section 14.2, with loopback origins and a fake vault reached over
-// HTTP. It lives outside src, so neither the published bundle nor npm pack
+// The Pi test build: the real extension with fixture providers, loopback
+// origins and a fake vault reached over HTTP. It lives outside src, so neither the published bundle nor npm pack
 // can contain it.
 import { appendFileSync } from 'node:fs'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'

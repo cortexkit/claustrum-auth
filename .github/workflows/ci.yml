@@ -32,9 +32,10 @@ jobs:
           tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
           test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
 
-  # The Pi extension against the real, pinned Pi CLI (design sections 14.2 and
-  # 14.3, and the Pi spike). Every test isolates PI_CODING_AGENT_DIR, HOME and
-  # USERPROFILE under target/scratch, so the runner's own ~/.pi is never used.
+  # The Pi extension against the real, pinned Pi CLI: serving, refusals,
+  # redirects, slots, and the Pi spike of docs/pi-spike.md. Every test
+  # isolates PI_CODING_AGENT_DIR, HOME and USERPROFILE under target/scratch,
+  # so the runner's own ~/.pi is never used.
   pi-e2e:
     strategy:
       fail-fast: false

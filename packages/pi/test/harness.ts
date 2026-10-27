@@ -37,8 +37,9 @@ afterEach(async () => {
 }, 60_000)
 
 export async function scratch(prefix: string) {
-  // Windows private files refuse a folder below a junction or symlink, so a
-  // machine whose checkout sits under one can point this elsewhere.
+  // On Windows, common-auth refuses to write owner-only files below a junction
+  // or symlink. If the checkout sits under one, set CLAUSTRUM_AUTH_PI_SCRATCH
+  // to a folder that does not.
   const base =
     process.env.CLAUSTRUM_AUTH_PI_SCRATCH ??
     path.join(root, 'target', 'scratch')

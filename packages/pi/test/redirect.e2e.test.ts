@@ -1,4 +1,4 @@
-// Section 14.3 of the design: the HTTP redirect proof on the real Pi CLI.
+// The HTTP redirect proof on the real Pi CLI.
 // The plugin follows no cross-origin redirect, so the second origin must see
 // no request at all, while the same-origin and no-redirect controls in the
 // same run do deliver the vault key, so a zero there is real.

@@ -33,8 +33,8 @@ job red.
    over the previous one and keeps every field the new one leaves out
    (`ModelRuntime.registerProvider`, "merges defined values over the previous
    registration and preserves undefined ones"). So registering a provider
-   again **without** `models` keeps the owned form's filtered list; the design's
-   assumption (section 9.1) that it restores Pi's catalog is false on 1.3.0.
+   again **without** `models` keeps the owned form's filtered list; on 1.3.0 it does
+   not restore Pi's catalog.
    `unregisterProvider` followed by `registerProvider` without `models`
    restores the built-in models and the user's `models.json` models exactly
    (measured on `fireworks`: 14 `anthropic-messages` and 8 built-in plus 1

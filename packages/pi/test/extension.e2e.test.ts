@@ -1,4 +1,5 @@
-// Section 14.2 of the design on the real Pi CLI, with the fixture providers.
+// The extension's serving, refusal and activation behaviour on the real Pi
+// CLI, with the fixture providers of the test build.
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import {
@@ -144,7 +145,8 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     vault.version = 7
     const pi = await launch()
     await pi.slash('/claustrum use fixture-a')
-    // A first read keeps a receipt; with reads down that kept receipt serves.
+    // After one successful vault read, custody keeps that key in memory, so a
+    // 401 while reads are down comes from a kept key, which is not reported.
     expect(await pi.turn('fixture-a', 'ok')).toMatchObject({
       text: 'served-ok',
     })

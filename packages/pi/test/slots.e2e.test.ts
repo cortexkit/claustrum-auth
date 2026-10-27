@@ -94,7 +94,8 @@ describe.skipIf(!e2e)('Pi slots on the real host', () => {
     })
     expect(mock.seen[0]?.headers.authorization).toBe(`Bearer ${secretOf('a1')}`)
     if (process.platform !== 'win32') {
-      // Windows protects these with an owner-only DACL instead of modes.
+      // Windows protects these with owner-only access control lists instead
+      // of file modes.
       expect(statSync(path.join(agent.state, 'pi-slots')).mode & 0o777).toBe(
         0o700,
       )
