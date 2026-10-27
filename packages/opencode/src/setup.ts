@@ -37,8 +37,19 @@ export interface ClaustrumSetupOptions {
   createCore(options: CoreOptions): ReturnType<typeof createCore>
 }
 
-export const vaultOnlyMessage =
-  'This plugin serves vault keys only; run setup with --claustrum.'
+export const vaultOnlyMessage = 'This plugin serves vault keys only.'
+
+export const setupUsage = [
+  'Usage: claustrum-auth [options]',
+  'Set up the vault-only claustrum-auth plugin for OpenCode and Pi.',
+  '  --dry-run                 Preview enrollment and registration without changes',
+  '  --yes                     Set up detected hosts without prompting',
+  '  --host <opencode|pi>       Select one host (also accepts --host=<host>)',
+  '  --opencode=1|2|both        Choose the OpenCode generation',
+  '  --enroll-only             Enroll without changing host configuration',
+  '  --claustrum               Compatibility flag; vault mode is always enabled',
+  '  --help                    Print this usage text without running setup',
+].join('\n')
 
 /** Setup guides activation; only a host may change its own credentials. */
 export async function runClaustrumSetup(
@@ -50,6 +61,24 @@ export async function runClaustrumSetup(
   const home = io.home ?? homedir()
   const terminal = io.terminal ?? processTerminal()
   const print = (text: string) => printLine(terminal, text)
+  if (argv.includes('--help')) {
+    print(setupUsage)
+    return
+  }
+  if (argv.includes('--no-claustrum') || argv.includes('--login'))
+    throw new Error(vaultOnlyMessage)
+  const setupArgv = ['--claustrum']
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index] as string
+    if (arg === '--claustrum') continue
+    if (
+      arg === '--host' &&
+      argv[index + 1] &&
+      !argv[index + 1]?.startsWith('--')
+    ) {
+      setupArgv.push(`--host=${argv[++index]}`)
+    } else setupArgv.push(arg)
+  }
   const states = {
     opencode: resolveOpencodeStateDir(env, home),
     pi: '',
@@ -77,6 +106,7 @@ export async function runClaustrumSetup(
     signInLocal: async () => {
       throw new Error(vaultOnlyMessage)
     },
+    // The current shared setup requires this callback; vault keys need no migration.
     migrate: async () => {},
     beforeRegister: async (host, mode, context) => {
       if (mode !== 'claustrum') throw new Error(vaultOnlyMessage)
@@ -197,11 +227,11 @@ export async function runClaustrumSetup(
     }
   }
 
-  const result = await runSetup(plugin, argv, io)
+  const result = await runSetup(plugin, setupArgv, io)
   if (result.hosts.length && result.mode !== 'claustrum')
     throw new Error(vaultOnlyMessage)
   if (result.dryRun && result.mode === 'claustrum') {
-    const explicit = argv
+    const explicit = setupArgv
       .find((arg) => arg.startsWith('--opencode='))
       ?.split('=')[1]
     const generation =

@@ -44,7 +44,7 @@ test('published setup dry run names both enrollments, exact grants and native ac
     ],
     h.io,
   )
-  expect(result.hosts).toEqual(['opencode', 'pi'])
+  expect(result?.hosts).toEqual(['opencode', 'pi'])
   const text = h.output()
   for (const host of ['opencode', 'pi']) {
     expect(text).toContain(`Enrollment: claustrum-auth-${host}`)
@@ -142,10 +142,10 @@ test('setup refuses local sign-in and delegates enroll-only without host registr
   ).rejects.toThrow(vaultOnlyMessage)
   expect(h.proposals).toEqual([])
   const result = await runClaustrumSetup(
-    ['--yes', '--enroll-only', '--host=pi'],
+    ['--yes', '--enroll-only', '--host', 'pi'],
     h.io,
   )
-  expect(result.hosts).toEqual(['pi'])
+  expect(result?.hosts).toEqual(['pi'])
   expect(h.proposals).toEqual(['claustrum-auth-pi'])
   expect(h.commands.every(({ args }) => args.includes('--version'))).toBe(true)
   expect(
@@ -223,3 +223,108 @@ test('shared stopped-process fence refuses setup before enrollment or state bind
   expect(h.proposals).toEqual([])
   expect(existsSync(path.join(root, 'state'))).toBe(false)
 })
+
+test('no-flag setup dry run defaults to vault enrollment, grants and activation without local sign-in', async () => {
+  const root = await profile()
+  const h = setupIO(root)
+  const bin = path.join(import.meta.dir, '..', 'dist', 'setup-bin.js')
+  const built = (await import(bin)) as {
+    runClaustrumSetup: typeof runClaustrumSetup
+  }
+  const result = await built.runClaustrumSetup(['--dry-run'], h.io)
+  expect(result?.mode).toBe('claustrum')
+  expect(result?.hosts).toEqual(['opencode', 'pi'])
+  expect(h.output()).toContain('Enrollment: claustrum-auth-opencode')
+  expect(h.output()).toContain('Enrollment: claustrum-auth-pi')
+  expect(h.output()).toContain(
+    'ck auth grant --principal enrolled:claustrum-auth-pi',
+  )
+  expect(h.output()).toContain('/claustrum use <provider>')
+  expect(h.output()).not.toMatch(
+    /sign in locally|beforeSignIn\([^\n]*local\)|\(local\)/u,
+  )
+  expect(h.proposals).toEqual([])
+  expect(existsSync(path.join(root, 'state'))).toBe(false)
+})
+
+test('explicit --no-claustrum is refused with the fixed vault-only message before planning', async () => {
+  const root = await profile()
+  const h = setupIO(root)
+  await expect(
+    runClaustrumSetup(['--dry-run', '--no-claustrum'], h.io),
+  ).rejects.toThrow('This plugin serves vault keys only.')
+  expect(h.output()).toBe('')
+  expect(h.proposals).toEqual([])
+  expect(h.commands).toEqual([])
+})
+
+test('separated --host pi limits vault-only setup to Pi without a host prompt', async () => {
+  const root = await profile()
+  const h = setupIO(root)
+  const result = await runClaustrumSetup(['--dry-run', '--host', 'pi'], h.io)
+  expect(result?.hosts).toEqual(['pi'])
+  expect(h.output()).toContain('Enrollment: claustrum-auth-pi')
+  expect(h.output()).not.toContain('Enrollment: claustrum-auth-opencode')
+  expect(h.output()).not.toContain('Would Connect opencode')
+  expect(h.proposals).toEqual([])
+})
+
+test('built setup bin --help prints supported flags and exits successfully without setup', async () => {
+  const root = await profile()
+  const h = setupIO(root)
+  await runClaustrumSetup(['--help'], h.io)
+  expect(h.output()).toContain('Usage:')
+  expect(h.commands).toEqual([])
+  expect(h.proposals).toEqual([])
+  const bin = path.join(import.meta.dir, '..', 'dist', 'setup-bin.js')
+  const node = Bun.which('node')
+  expect(node).not.toBeNull()
+  const help = spawnSync(node as string, [bin, '--help'], {
+    env: h.env,
+    cwd: root,
+    encoding: 'utf8',
+  })
+  expect(help.status).toBe(0)
+  expect(help.stdout).toContain('Usage:')
+  for (const flag of [
+    '--dry-run',
+    '--yes',
+    '--host',
+    '--opencode',
+    '--enroll-only',
+    '--claustrum',
+    '--help',
+  ])
+    expect(help.stdout).toContain(flag)
+  expect(help.stdout).not.toContain('Checking that OpenCode')
+  expect(help.stderr).toBe('')
+  expect(existsSync(path.join(root, 'state'))).toBe(false)
+})
+
+test.each(['detected', 'explicit'] as const)(
+  'OpenCode 2 activation instruction is printed when generation is %s',
+  async (generation) => {
+    const root = await profile()
+    const h = setupIO(root)
+    if (generation === 'detected') {
+      const fs = h.io.fs
+      if (!fs) throw new Error('missing setup detection filesystem')
+      h.io.fs = {
+        ...fs,
+        readText: (file) =>
+          file === path.join(root, 'bin with spaces', 'package.json')
+            ? JSON.stringify({ name: '@opencode/cli', version: '2.0.32' })
+            : fs.readText(file),
+      }
+    }
+    await runClaustrumSetup(
+      ['--dry-run', ...(generation === 'explicit' ? ['--opencode=2'] : [])],
+      h.io,
+    )
+    expect(h.output()).toContain(
+      'opencode auth login <provider> --method claustrum-auth',
+    )
+    expect(h.output()).toContain('opencode2: no provider is available yet.')
+    expect(h.output()).not.toContain('In OpenCode 1, type next:')
+  },
+)

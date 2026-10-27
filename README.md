@@ -14,13 +14,16 @@ form until a provider has passed its host's support checks.
 Once published, preview the setup plan without changing the profile:
 
 ```sh
-bunx @cortexkit/opencode-claustrum-auth --dry-run --claustrum --opencode=both
+bunx @cortexkit/opencode-claustrum-auth --dry-run --opencode=both
 ```
 
 Quit OpenCode and Pi, then run the same command with `--yes` instead of
 `--dry-run`. Setup uses common-auth's host detection, stopped-process fence,
-enrollment ceremony and registration. `--host=opencode` or `--host=pi` limits
-the run; `--enroll-only` skips host registration. Approve each host's separate
+enrollment ceremony and registration. Vault mode is always enabled;
+`--claustrum` is accepted for compatibility and `--no-claustrum` is refused.
+`--host opencode` or `--host pi` limits the run (the equals form also works);
+`--enroll-only` skips host registration. Use `--help` to list supported flags.
+Approve each host's separate
 enrollment in `ck auth`. Setup prints the exact grant command and resolved
 state paths; enrollment alone does not grant credential access.
 
