@@ -20,7 +20,7 @@ import {
 import { mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import { type FakeVault, startFakeVault, type VaultRow } from './fake-vault.ts'
 import {
@@ -117,7 +117,15 @@ class Scenario {
       CLAUSTRUM_AUTH_E2E_LOG: this.log,
       CLAUSTRUM_AUTH_E2E_ORIGIN: mock.url,
     })
-    const config = { plugins: [pluginDir], providers: providerConfig(mock) }
+    // A file URL, not a native path: the documented plugin spec on every
+    // OS, and the only form a Windows checkout path (backslashes, drive
+    // letter) reaches the host's loader in. Without it the host never
+    // loads the plugin there, so no login method is registered and every
+    // login fails with "Authentication method not found: claustrum-auth".
+    const config = {
+      plugins: [pathToFileURL(pluginDir).href],
+      providers: providerConfig(mock),
+    }
     const dir = path.join(this.env.XDG_CONFIG_HOME, 'opencode')
     mkdirSync(dir, { recursive: true })
     writeFileSync(
@@ -482,13 +490,27 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
   }, 300_000)
 
   afterAll(async () => {
-    if (scratch)
-      await rm(scratch, {
-        recursive: true,
-        force: true,
-        maxRetries: 10,
-        retryDelay: 200,
-      })
+    if (!scratch) return
+    // The CLI install holds thousands of files; on Windows the last host
+    // may release them a moment after it exits. A leftover temp folder
+    // must not fail the suite: the runner reclaims its temp anyway.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rm(scratch, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 200,
+        })
+        return
+      } catch (error) {
+        if (attempt >= 3) {
+          console.warn(`cleanup: could not remove ${scratch}: ${error}`)
+          return
+        }
+        await Bun.sleep(1000)
+      }
+    }
   })
 
   test('the isolated profile resolves home inside the scratch root on every OS', () => {

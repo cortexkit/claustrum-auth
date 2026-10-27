@@ -1,10 +1,17 @@
 // A harness that runs the real Pi CLI in RPC mode with an isolated agent
 // folder, a loopback mock provider and a fake vault. Every Pi it starts gets
-// its own PI_CODING_AGENT_DIR, HOME and USERPROFILE under target/scratch, so a
-// test never reads or writes the real ~/.pi.
+// its own PI_CODING_AGENT_DIR, HOME and USERPROFILE under target/scratch
+// (the user's own temp folder on Windows, where owner-only writes are
+// allowed), so a test never reads or writes the real ~/.pi.
 import { afterEach } from 'bun:test'
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import {
+  type Dirent,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+} from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import {
   createServer,
@@ -677,19 +684,54 @@ export async function readAuth(authPath: string) {
   >
 }
 
-/** Every file under a folder, for checking that no secret was written. */
+/**
+ * Every file under a folder, for checking that no secret was written. A
+ * file that vanishes between the listing and the read holds nothing to
+ * scan, so it is skipped instead of failing the check.
+ */
 export function filesUnder(dir: string): string[] {
-  if (!existsSync(dir)) return []
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  let entries: Dirent[]
+  try {
+    if (!existsSync(dir)) return []
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return []
+    throw error
+  }
+  return entries.flatMap((entry) => {
     const file = path.join(dir, entry.name)
     return entry.isDirectory() ? filesUnder(file) : [file]
   })
 }
 
+/**
+ * Reads one scanned file, retrying a Windows sharing violation while Pi
+ * still holds the file, and skipping files that vanished meanwhile. Only
+ * the scan uses this: the leak check must never fail on a file that is
+ * already gone.
+ */
+function readScanned(file: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return readFileSync(file, 'utf8')
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code
+      if (code === 'ENOENT') return ''
+      if (
+        process.platform === 'win32' &&
+        (code === 'EPERM' || code === 'EBUSY') &&
+        attempt < 20
+      ) {
+        Bun.sleepSync(100)
+        continue
+      }
+      throw error
+    }
+  }
+}
+
 export function anyFileContains(dir: string, needle: string) {
-  return filesUnder(dir).filter((file) =>
-    readFileSync(file, 'utf8').includes(needle),
-  )
+  return filesUnder(dir).filter((file) => readScanned(file).includes(needle))
 }
 
 export const placeholderOf = (providerId: string) =>

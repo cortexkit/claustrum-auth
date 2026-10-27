@@ -4,6 +4,7 @@
 // event stream that stays open until disposal.
 import { afterEach } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
@@ -199,15 +200,14 @@ export async function startServer(
     table?: readonly ProviderEntry[]
   } = {},
 ) {
-  const scratch = path.join(
-    import.meta.dir,
-    '..',
-    '..',
-    '..',
-    '..',
-    'target',
-    'scratch',
-  )
+  // common-auth writes these files owner-only and refuses a parent folder
+  // that other users may change. A Windows CI checkout (D:\a\...) is such
+  // a folder, so on Windows the scratch goes in the user's own temp folder
+  // instead.
+  const scratch =
+    process.platform === 'win32'
+      ? path.join(os.tmpdir(), 'claustrum-auth-scratch')
+      : path.join(import.meta.dir, '..', '..', '..', '..', 'target', 'scratch')
   await mkdir(scratch, { recursive: true })
   const dir = await mkdtemp(path.join(scratch, 'opencode2-'))
   cleanup.push(() => rm(dir, { recursive: true, force: true }))
