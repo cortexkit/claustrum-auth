@@ -5,7 +5,7 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "rootDir": "src",
-    "outDir": "dist",
+    "outDir": "../../target/declarations/opencode",
     "paths": { "@cortexkit/claustrum-auth-core": ["../core/dist/index.d.ts"] }
   },
   "include": ["src"],
