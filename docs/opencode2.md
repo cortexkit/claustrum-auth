@@ -68,3 +68,25 @@ request.
   only with `CLAUSTRUM_AUTH_OPENCODE2_E2E=1` (the `opencode2-e2e` CI job, on
   Linux, macOS and Windows) because it installs the CLI with npm.
   `CLAUSTRUM_AUTH_OPENCODE2_E2E_CLI_DIR` may point at an existing install.
+
+### Real-host startup diagnostics
+
+The fixture bundle uses the production runtime externals, with a
+`node_modules` link to the installed dependencies. In particular,
+`@cortexkit/private-files` must keep its package layout: its Windows loader
+finds `../prebuilds/*.node` relative to its own `import.meta.url`. Inlining
+that loader into the scratch plugin relocates the lookup to a nonexistent
+scratch `prebuilds` directory. POSIX private writes do not load that addon,
+so a fully inlined fixture can pass on Linux and macOS but fail before
+registering any login method on Windows. The published build already keeps
+these dependencies external.
+
+On a failed scenario the harness prints the exact `opencode.json`, the plugin
+folder's recursive file list, native realpaths alongside the supplied paths,
+and the full stdout and stderr of every host process, including servers from
+before a restart. The server runs with debug logging; startup loader errors
+are not truncated to the last requests. The fixture also records import,
+setup and enrollment-token stages, and rethrows setup errors after recording
+their message, stack, cause and native security fields. A missing login method
+can therefore be traced back to import resolution or the specific setup
+refusal rather than inferred from an empty plugin log.
