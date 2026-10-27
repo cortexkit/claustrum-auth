@@ -56,7 +56,11 @@ async function copyPackage(
 
 export async function buildPlugin(
   outdir: string,
-  options: { copyDependencies?: boolean } = {},
+  options: {
+    copyDependencies?: boolean
+    /** Called as each build phase ends, for a test's phase clock. */
+    mark?: (label: string) => void
+  } = {},
 ) {
   const build = await Bun.build({
     ...bundleOptions,
@@ -64,6 +68,7 @@ export async function buildPlugin(
     outdir,
     naming: 'index.js',
   })
+  options.mark?.('bundle')
   if (!build.success)
     throw new Error(`plugin bundle failed: ${build.logs.join('\n')}`)
   await writeFile(
@@ -83,6 +88,7 @@ export async function buildPlugin(
         path.dirname(fileURLToPath(import.meta.url)),
         path.join(outdir, 'node_modules'),
       )
+      options.mark?.(`copy ${name}`)
     }
   } else {
     await symlink(
@@ -90,6 +96,7 @@ export async function buildPlugin(
       path.join(outdir, 'node_modules'),
       'junction',
     )
+    options.mark?.('link dependencies')
   }
   return build
 }

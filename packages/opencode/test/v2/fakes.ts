@@ -248,17 +248,40 @@ export async function startServer(
     offline?: boolean
     mode?: 'vault' | 'local'
     table?: readonly ProviderEntry[]
+    /**
+     * Receives a mark as each setup phase ends, for a test's phase clock. The
+     * token write is one owner-only private write, so its mark carries that
+     * write's own time and rename attempts.
+     */
+    clock?: { mark(label: string): void }
   } = {},
 ) {
   const scratch = scratchRoot()
   await mkdir(scratch, { recursive: true })
   const dir = await mkdtemp(path.join(scratch, 'opencode2-'))
   cleanup.push(() => rm(dir, { recursive: true, force: true }))
+  options.clock?.mark('scratch folder')
   const tokenPath = path.join(dir, 'token.json')
-  await writeJsonAtomic(tokenPath, {
-    token: '01'.repeat(32),
-    token_generation: 1,
-  })
+  const writeStarted = performance.now()
+  let renameAttempts: number | undefined
+  await writeJsonAtomic(
+    tokenPath,
+    {
+      token: '01'.repeat(32),
+      token_generation: 1,
+    },
+    {
+      onOutcome: (outcome) => {
+        renameAttempts = outcome.attempts
+      },
+    },
+  )
+  options.clock?.mark(
+    `token write ${Math.round(performance.now() - writeStarted)}ms` +
+      (renameAttempts === undefined
+        ? ''
+        : ` (rename attempts ${renameAttempts})`),
+  )
   const vault: FakeVault = {
     rows: options.rows ?? [row('a1')],
     reads: [],
@@ -333,6 +356,7 @@ export async function startServer(
     onError: (error) => errors.push(error),
   }
   const dispose = await setupServer(host.ctx, deps)
+  options.clock?.mark('plugin setup')
   cleanup.push(async () => {
     host.dispose()
     await dispose()

@@ -9,6 +9,7 @@ import {
   supportedProviders,
 } from '../../../core/test-entry.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
+import { phaseClock } from '../phase-clock.ts'
 import { type FakeHost, row, scope, startServer, trigger } from './fakes.ts'
 
 const bearer = (provider: string) => ({
@@ -113,6 +114,13 @@ test('xai is served into its WebSocket handshake to wss://api.x.ai only, and a l
 // One test per provider: each starts a server that writes owner-only files,
 // and a single loop over every provider ran past Bun's 5 s default on
 // Windows. A failure now also names the provider that broke.
+//
+// Each test's own work is the first sign-in, where the hub commits one
+// owner-only roster per listed provider (11 for the shipped table). Measured
+// on a Windows Server 2022 build machine: about 1 s per test, 0.9 s of it
+// in that sign-in (about 80 ms per roster commit, against about 6 ms for one
+// private file write); GitHub's windows-latest once ran the xai test past
+// 5 s. The phase clock prints the phases of any run past 4 s.
 test.each(
   supportedProviders
     .filter((entry) => entry.hosts.opencode2)
@@ -120,6 +128,7 @@ test.each(
 )(
   '%s is served with its vault key, and a lookalike origin is refused before the read',
   async (provider, entry) => {
+    const clock = phaseClock(`${provider} served-key test`)
     {
       const origin = new URL(entry.origins[0] as string)
       // The operator's row: the fleet id (cline-pass: its exact credential id
@@ -132,17 +141,20 @@ test.each(
         rows: [vaultRow],
         catalog: opencode2Catalog(supportedProviders),
         table: supportedProviders,
+        clock,
       })
       expect(await login(host, provider)).toMatchObject({
         type: 'oauth',
         access: placeholderSecret(provider),
       })
+      clock.mark('login')
       const request = new Request(new URL('/v1/chat/completions', origin), {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...bearer(provider) },
         body: '{}',
       })
       const sent = await send(host, provider, request)
+      clock.mark('served request')
       expect([provider, sent.request.headers.get('authorization')]).toEqual([
         provider,
         `Bearer secret-${credential}-1`,
@@ -165,9 +177,12 @@ test.each(
           ),
         ).rejects.toThrow('is only sent to')
       }
+      clock.mark('lookalike requests')
       expect(vault.reads).toEqual([credential])
     }
+    clock.done()
   },
+  20_000,
 )
 
 test('a provider the host catalog does not hold gets no login method account', async () => {
