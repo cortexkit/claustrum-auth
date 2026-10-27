@@ -351,7 +351,10 @@ export async function fakeVault(initial: ScopedInventoryRow[] = []) {
         accountId:
           served === undefined ? listed.accountId : (served ?? undefined),
         recordVersion: state.version,
-        expiresAtMs: null,
+        // Custody refuses an OAuth read with no expiry, so an OAuth row is
+        // served with an hour left, as the vault serves a minted token.
+        expiresAtMs:
+          listed.credentialType === 'oauth' ? Date.now() + 3_600_000 : null,
       })
     }
     if (op === 'report') {

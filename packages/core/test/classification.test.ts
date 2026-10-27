@@ -84,7 +84,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
     'deepseek',
     'fireworks-ai',
     'inception',
-    'kimi-for-coding',
+    'kimi-code-plan-global',
     'openrouter',
     'typesafe',
     'cloudflare-workers-ai',
@@ -100,9 +100,15 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
             ['cline-pass', 'inception', 'typesafe'].includes(id))
         )
           return { kind: 'refused', code: 'not-on-this-host' }
-        if (host === 'pi' && ['fireworks-ai', 'kimi-for-coding'].includes(id))
-          return { kind: 'refused', code: 'host-id-missing' }
-        return { kind: 'mine', member: id }
+        // Rows carry fleet ids; two services have other ids on the hosts.
+        const member =
+          host === 'pi'
+            ? {
+                'fireworks-ai': 'fireworks',
+                'kimi-code-plan-global': 'kimi-coding',
+              }[id]
+            : { 'kimi-code-plan-global': 'kimi-for-coding' }[id]
+        return { kind: 'mine', member: member ?? id }
       },
     })
   }
@@ -118,23 +124,34 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
   ).toBe('B')
 })
 
-test('classification refuses missing host id and admits only explicit same-service aliases', () => {
+// Vault rows name services by fleet id (the ids fleet routing and pricing
+// use), and the vault owner never retags a row for the plugin. The plugin maps
+// each fleet id to the running host's id, and refuses an id it has no mapping
+// for instead of guessing.
+test('classification maps fleet ids to each host id and refuses host ids and unknown fleet ids', () => {
   const run = (ids: string[], host: Host) =>
     classifyRow(fact(ids), facts(host), catalogEntries)
-  expect(run(['fireworks-ai'], 'pi')).toEqual({
-    kind: 'refused',
-    code: 'host-id-missing',
-  })
-  expect(run(['fireworks'], 'opencode1')).toEqual({
-    kind: 'refused',
-    code: 'host-id-missing',
-  })
-  for (const host of hosts)
-    expect(run(['fireworks-ai', 'fireworks'], host)).toEqual({
+  for (const host of hosts) {
+    expect(run(['fireworks-ai'], host)).toEqual({
       kind: 'mine',
       member: host === 'pi' ? 'fireworks' : 'fireworks-ai',
     })
-  expect(run(['fireworks-ai', 'fireworks', 'new-alias'], 'pi')).toEqual({
+    expect(run(['kimi-code-plan-global'], host)).toEqual({
+      kind: 'mine',
+      member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
+    })
+    // A host's own id is not a fleet id.
+    for (const hostId of ['fireworks', 'kimi-for-coding', 'kimi-coding'])
+      expect(run([hostId], host)).toEqual({
+        kind: 'refused',
+        code: 'unsupported-provider',
+      })
+    expect(run(['a-fleet-id-the-table-lacks'], host)).toEqual({
+      kind: 'refused',
+      code: 'unsupported-provider',
+    })
+  }
+  expect(run(['fireworks-ai', 'new-alias'], 'pi')).toEqual({
     kind: 'refused',
     code: 'mixed-services',
   })
@@ -193,6 +210,10 @@ test('reserved matrix never admits reserved providers alone or beside others', (
     'kimi-coding',
     'openrouter',
     'typesafe',
+    'meta',
+    'xai',
+    'opencode-go',
+    'opencode-zen',
   ])
 })
 

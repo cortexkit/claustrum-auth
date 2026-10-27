@@ -25,11 +25,14 @@ type Outcome =
   | { kind: 'refused'; code: RefusalCode }
 
 // The vault rows the operator holds, as the vault lists them: credential ids,
-// provider ids and the `llm-provider` category. Classification routes on this
-// metadata only and never reads the credential id.
+// fleet provider ids, credential type and categories. Classification routes on
+// this metadata only; the one exception is cline-pass, matched by its exact
+// credential id because its row deliberately carries no provider id.
 const vaultRows: {
   credential: string
   providerIds: readonly string[]
+  credentialType?: 'oauth' | 'api_key'
+  categories?: readonly string[]
   expected: (host: Host) => Outcome
 }[] = [
   {
@@ -43,14 +46,14 @@ const vaultRows: {
     expected: () => ({ kind: 'mine', member: 'deepseek' }),
   },
   {
-    // The operator's row names OpenCode's id only, so Pi refuses it: no host
-    // substitutes one of its own ids for another's (section 4.2 step 7).
+    // The fleet id `fireworks-ai` is OpenCode's id too; Pi serves it as its
+    // own `fireworks`.
     credential: 'apikey:fireworks-ai',
     providerIds: ['fireworks-ai'],
-    expected: (host) =>
-      host === 'pi'
-        ? { kind: 'refused', code: 'host-id-missing' }
-        : { kind: 'mine', member: 'fireworks-ai' },
+    expected: (host) => ({
+      kind: 'mine',
+      member: host === 'pi' ? 'fireworks' : 'fireworks-ai',
+    }),
   },
   {
     credential: 'apikey:inception',
@@ -66,9 +69,13 @@ const vaultRows: {
     expected: () => ({ kind: 'mine', member: 'openrouter' }),
   },
   {
+    // The fleet id names Kimi's coding plan; each host has its own id for it.
     credential: 'apikey:kimi-for-coding',
     providerIds: ['kimi-code-plan-global'],
-    expected: () => ({ kind: 'refused', code: 'unsupported-provider' }),
+    expected: (host) => ({
+      kind: 'mine',
+      member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
+    }),
   },
   {
     credential: 'apikey:typesafe',
@@ -78,11 +85,62 @@ const vaultRows: {
         ? { kind: 'refused', code: 'not-on-this-host' }
         : { kind: 'mine', member: 'typesafe' },
   },
+  {
+    // No provider id on purpose, so fleet routing never picks it.
+    credential: 'apikey:cline-pass',
+    providerIds: [],
+    expected: (host) =>
+      host === 'pi'
+        ? { kind: 'refused', code: 'not-on-this-host' }
+        : { kind: 'mine', member: 'cline-pass' },
+  },
+  {
+    // `meta-native` marks a row a dedicated plugin may own later; no such
+    // plugin exists, and the reserved matrix does not name `meta`.
+    credential: 'oauth:meta',
+    providerIds: ['meta'],
+    credentialType: 'oauth',
+    categories: ['llm-provider', 'meta-native'],
+    expected: () => ({ kind: 'mine', member: 'meta' }),
+  },
+  {
+    credential: 'oauth:xai',
+    providerIds: ['xai'],
+    credentialType: 'oauth',
+    categories: ['llm-provider', 'xai-native'],
+    expected: (host) =>
+      host === 'opencode2'
+        ? { kind: 'refused', code: 'not-on-this-host' }
+        : { kind: 'mine', member: 'xai' },
+  },
+  {
+    credential: 'apikey:opencode-go',
+    providerIds: ['opencode-go'],
+    expected: () => ({ kind: 'mine', member: 'opencode-go' }),
+  },
+  {
+    credential: 'apikey:opencode-zen',
+    providerIds: ['opencode'],
+    expected: (host) =>
+      host === 'opencode2'
+        ? { kind: 'refused', code: 'not-on-this-host' }
+        : { kind: 'mine', member: 'opencode' },
+  },
 ]
 
 const hosts: Host[] = ['opencode1', 'opencode2', 'pi']
 
-test('every live entry serves its own host id and lists every host that sends Authorization', () => {
+function facts(item: (typeof vaultRows)[number]) {
+  return {
+    credentialId: item.credential,
+    credentialType: item.credentialType ?? 'api_key',
+    authMethod: item.credentialType === 'oauth' ? 'oauth' : 'api-key',
+    categories: item.categories ?? ['llm-provider'],
+    providerIds: item.providerIds,
+  }
+}
+
+test('every live entry maps its fleet ids to a host id on each host it lists', () => {
   expect(supportedProviders.map((entry) => entry.service)).toEqual([
     'cerebras',
     'cline-pass',
@@ -92,27 +150,54 @@ test('every live entry serves its own host id and lists every host that sends Au
     'kimi-coding',
     'openrouter',
     'typesafe',
+    'meta',
+    'xai',
+    'opencode-go',
+    'opencode-zen',
   ])
   for (const entry of supportedProviders) {
     expect(entry.class).toBe('A')
-    for (const host of hosts) {
-      const id = entry.hosts[host]
-      if (!id) continue
-      expect(entry.ids).toContain(id)
-      for (const origin of entry.origins)
-        expect(new URL(origin).protocol).toBe('https:')
-    }
+    expect(entry.ids.length).toBeGreaterThan(0)
+    for (const origin of entry.origins)
+      expect(new URL(origin).protocol).toBe('https:')
   }
+  const hostIds = (host: Host) =>
+    Object.fromEntries(
+      supportedProviders.flatMap((entry) =>
+        entry.hosts[host] ? [[entry.service, entry.hosts[host]]] : [],
+      ),
+    )
+  expect(hostIds('opencode1')).toEqual({
+    cerebras: 'cerebras',
+    'cline-pass': 'cline-pass',
+    deepseek: 'deepseek',
+    fireworks: 'fireworks-ai',
+    inception: 'inception',
+    'kimi-coding': 'kimi-for-coding',
+    openrouter: 'openrouter',
+    typesafe: 'typesafe',
+    meta: 'meta',
+    xai: 'xai',
+    'opencode-go': 'opencode-go',
+    'opencode-zen': 'opencode',
+  })
+  // xAI waits for its WebSocket handshake proof, and OpenCode Zen's stored
+  // credential is read by the host's Console plugin outside the request hooks.
+  const { xai: _xai, 'opencode-zen': _zen, ...opencode2 } = hostIds('opencode1')
+  expect(hostIds('opencode2')).toEqual(opencode2)
   // Pi registers a provider only through pi-ai's bearer apis, so the services
   // Pi's own catalog does not offer as bearer providers are OpenCode only.
-  const onPi = supportedProviders.flatMap((entry) => entry.hosts.pi ?? [])
-  expect(onPi.sort()).toEqual([
-    'cerebras',
-    'deepseek',
-    'fireworks',
-    'kimi-coding',
-    'openrouter',
-  ])
+  expect(hostIds('pi')).toEqual({
+    cerebras: 'cerebras',
+    deepseek: 'deepseek',
+    fireworks: 'fireworks',
+    'kimi-coding': 'kimi-coding',
+    openrouter: 'openrouter',
+    meta: 'meta',
+    xai: 'xai',
+    'opencode-go': 'opencode-go',
+    'opencode-zen': 'opencode',
+  })
 })
 
 test('each shipped origin is the provider API host, and no other host of it is allowed', () => {
@@ -128,32 +213,62 @@ test('each shipped origin is the provider API host, and no other host of it is a
     'kimi-coding': ['https://api.kimi.com'],
     openrouter: ['https://openrouter.ai'],
     typesafe: ['https://api.typesafe.ai'],
+    meta: ['https://api.meta.ai'],
+    xai: ['https://api.x.ai'],
+    'opencode-go': ['https://opencode.ai'],
+    'opencode-zen': ['https://opencode.ai'],
   })
 })
 
 test('the operator vault rows route to their provider on every host, and nowhere else', () => {
   for (const host of hosts) {
-    const facts = liveFacts(host)
+    const hostFacts = liveFacts(host)
     for (const item of vaultRows) {
       expect([
         item.credential,
         host,
-        classifyRow(
-          {
-            credentialId: item.credential,
-            credentialType: 'api_key',
-            authMethod: 'api-key',
-            categories: ['llm-provider'],
-            providerIds: item.providerIds,
-          },
-          facts,
-        ),
+        classifyRow(facts(item), hostFacts),
       ]).toEqual([item.credential, host, item.expected(host)])
     }
   }
 })
 
-test('a row naming both the OpenCode and the Pi id of one service is served on both hosts', () => {
+test('cline-pass is served by its exact credential id only while the row has no provider id', () => {
+  const cline = vaultRows.find(
+    (item) => item.credential === 'apikey:cline-pass',
+  )
+  if (!cline) throw new Error('no cline-pass row')
+  for (const host of hosts) {
+    const hostFacts = liveFacts(host)
+    // Another credential with no provider id is not cline-pass, however
+    // close its name: the match is exact, with no prefix or pattern.
+    for (const credential of [
+      'apikey:cline-pass-2',
+      'apikey:cline',
+      'APIKEY:CLINE-PASS',
+      'apikey:cline-pass ',
+    ])
+      expect(
+        classifyRow({ ...facts(cline), credentialId: credential }, hostFacts),
+      ).toEqual({
+        kind: 'refused',
+        code: 'unmapped',
+      })
+    // Once the row names a provider, the credential id plays no part: the
+    // row is classified by its ids like any other.
+    expect(
+      classifyRow({ ...facts(cline), providerIds: ['deepseek'] }, hostFacts),
+    ).toEqual({ kind: 'mine', member: 'deepseek' })
+    expect(
+      classifyRow(
+        { ...facts(cline), providerIds: ['a-fleet-id-the-table-lacks'] },
+        hostFacts,
+      ),
+    ).toEqual({ kind: 'refused', code: 'unsupported-provider' })
+  }
+})
+
+test('fleet ids map to each host id: fireworks-ai on Pi is fireworks, kimi-code-plan-global is kimi on both hosts', () => {
   const row = (providerIds: string[]) => ({
     credentialId: 'opaque',
     credentialType: 'api_key',
@@ -163,16 +278,25 @@ test('a row naming both the OpenCode and the Pi id of one service is served on b
   })
   for (const host of hosts) {
     const facts = liveFacts(host)
-    expect(classifyRow(row(['fireworks-ai', 'fireworks']), facts)).toEqual({
+    expect(classifyRow(row(['fireworks-ai']), facts)).toEqual({
       kind: 'mine',
       member: host === 'pi' ? 'fireworks' : 'fireworks-ai',
     })
-    expect(classifyRow(row(['kimi-for-coding', 'kimi-coding']), facts)).toEqual(
-      {
-        kind: 'mine',
-        member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
-      },
-    )
+    expect(classifyRow(row(['kimi-code-plan-global']), facts)).toEqual({
+      kind: 'mine',
+      member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
+    })
+    // A fleet id the table has no mapping for is refused, never guessed.
+    expect(classifyRow(row(['kimi-code-plan-cn']), facts)).toEqual({
+      kind: 'refused',
+      code: 'unsupported-provider',
+    })
+    // A host id beside the fleet id is not a fleet id, so the row is refused
+    // as naming two things rather than served under either.
+    expect(classifyRow(row(['fireworks-ai', 'fireworks']), facts)).toEqual({
+      kind: 'refused',
+      code: 'mixed-services',
+    })
   }
 })
 
@@ -243,6 +367,8 @@ test('a shipped provider serves its vault row only to its documented origin', as
         ? [
             row(item.credential, {
               providerIds: item.providerIds,
+              credentialType: item.credentialType ?? 'api_key',
+              categories: [...(item.categories ?? ['llm-provider'])],
               accountId: `account-${item.credential}`,
             }),
           ]
@@ -253,10 +379,8 @@ test('a shipped provider serves its vault row only to its documented origin', as
     for (const item of vaultRows) {
       const outcome = item.expected(host)
       if (outcome.kind !== 'mine') continue
-      const entry = tableByService.get(
-        supportedProviders.find((candidate) =>
-          candidate.ids.includes(outcome.member),
-        )?.service as string,
+      const entry = supportedProviders.find(
+        (candidate) => candidate.hosts[host] === outcome.member,
       )
       if (!entry) throw new Error(`no entry for ${outcome.member}`)
       const consumer = h.consumers.get(outcome.member)

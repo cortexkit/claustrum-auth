@@ -35,7 +35,10 @@ export function createCoreWithTable(
     ...hubOptions,
     hostGeneration: facts.host,
     classifierInput: {
-      version: 1,
+      // The classification rules, not the data: version 2 reads provider ids
+      // as fleet ids and admits the exact-credential-id entries. A new version
+      // keeps rosters projected under the old rules apart.
+      version: 2,
       facts,
       table,
       reservedProviders,

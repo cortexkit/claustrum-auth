@@ -86,13 +86,19 @@ async function withTable(
   let active = true
   let version = 1
   let outage = false
-  let get: ClaustrumScopedClient['getScoped'] = async ({ credentialId }) => ({
-    credentialId,
-    material: `secret-${credentialId}-${version}`,
-    accountId: rows.find((r) => r.id === credentialId)?.accountId,
-    recordVersion: version,
-    expiresAtMs: null,
-  })
+  let get: ClaustrumScopedClient['getScoped'] = async ({ credentialId }) => {
+    const listed = rows.find((r) => r.id === credentialId)
+    return {
+      credentialId,
+      material: `secret-${credentialId}-${version}`,
+      accountId: listed?.accountId,
+      recordVersion: version,
+      // Custody refuses an OAuth read with no expiry, so an OAuth row is served
+      // with an hour left, as the vault serves a minted token.
+      expiresAtMs:
+        listed?.credentialType === 'oauth' ? Date.now() + 3_600_000 : null,
+    }
+  }
   const client: ClaustrumScopedClient = {
     async listScoped() {
       lists++
