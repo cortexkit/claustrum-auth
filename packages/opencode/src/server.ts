@@ -10,7 +10,8 @@ import { productionDeps } from './v2/vault.ts'
 const claustrumAuth = {
   id: pluginId,
   server: legacy.server,
-  setup: (ctx: Plugin.Context) => setupServer(ctx, productionDeps()),
+  setup: async (ctx: Plugin.Context) =>
+    setupServer(ctx, await productionDeps()),
 } satisfies Plugin.Plugin & PluginModule
 
 export default claustrumAuth

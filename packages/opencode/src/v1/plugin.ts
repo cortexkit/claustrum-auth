@@ -16,6 +16,7 @@ import {
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
 import type { Hooks, PluginInput } from '@opencode-ai/plugin'
+import { opencodeStateDir } from '../state-dir.js'
 import {
   type ActivationContext,
   type AuthApi,
@@ -27,7 +28,7 @@ import { hostEnvironment } from './effective.js'
 import { providerFetch } from './fetch.js'
 import { ReleasedFlags } from './flags.js'
 import { hostAuthApi } from './host-auth.js'
-import { opencodeAuthFile, pluginStateDir } from './paths.js'
+import { opencodeAuthFile } from './paths.js'
 
 type Env = Readonly<Record<string, string | undefined>>
 type Core = {
@@ -71,12 +72,14 @@ type ProviderBlock = {
   [key: string]: unknown
 }
 
-export function opencode1Hosts(
+export async function opencode1Hosts(
   options: OpenCode1PluginOptions,
   input: PluginInput,
-): Hooks {
+): Promise<Hooks> {
   const env = options.env ?? (() => process.env)
-  const stateDir = (options.stateDir ?? (() => pluginStateDir(env())))()
+  const stateDir = options.stateDir
+    ? options.stateDir()
+    : await opencodeStateDir(env())
   const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
   const isCustodyActive =
     options.isCustodyActive ??

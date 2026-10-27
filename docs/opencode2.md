@@ -59,6 +59,34 @@ for the rest of its life (common-auth's mixed-ownership rule). A 401 is
 reported to the vault only for the key that this host was served for that
 request.
 
+## Plugin state
+
+OpenCode 2 and OpenCode 1 share the enrollment `claustrum-auth-opencode` and
+the same state folder, outside OpenCode's watched configuration folder. With
+the default config folder (`<home>/.config/opencode`), the default state paths
+are:
+
+| OS | Default state folder |
+| --- | --- |
+| Linux | `~/.local/state/cortexkit/claustrum-auth/opencode/` |
+| macOS | `~/.local/state/cortexkit/claustrum-auth/opencode/` |
+| Windows | `%USERPROFILE%\.local\state\cortexkit\claustrum-auth\opencode\` |
+
+On every OS, `XDG_STATE_HOME` replaces `~/.local/state` when set. A different
+config folder (from `OPENCODE_CONFIG_DIR` or `XDG_CONFIG_HOME/opencode`) uses
+`opencode-<hash>` instead of `opencode`, where `<hash>` is the first 16 hex
+characters of SHA-256 of the config folder's native realpath (or its resolved
+path if it does not exist), without case folding. The default config folder
+is determined from the home directory, not `XDG_CONFIG_HOME`.
+Paths that resolve to the same real config folder share state, including
+aliases of the default folder.
+
+The state folder holds the enrollment token and state, rosters, activation
+flags and an owner-only `config-dir.json` binding it to the config folder's
+identity. The plugin refuses a binding for another config folder rather than
+sharing its state. It writes no plugin runtime files under OpenCode's config
+folder. No old state is migrated.
+
 ## Tests
 
 - `packages/opencode/test/v2/server.test.ts`: the entry against a fake host
