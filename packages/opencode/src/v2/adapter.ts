@@ -46,6 +46,7 @@ export interface VaultAdapterOptions {
   now?: () => number
   /** Errors of the 401 report, which never reach the host. */
   onError?: (error: unknown) => void
+  onRefusal?: (code: 'placement-refused' | 'origin-refused') => void
 }
 
 const defaultMarkMs = 60_000
@@ -87,8 +88,14 @@ export function createVaultAdapter(
 ): OpenCode2AuthAdapter<never, VaultAttempt, ChooseAccountResult> {
   const now = options.now ?? Date.now
   const placeholder = placeholderSecret(options.provider)
-  const refuse = (error: unknown) =>
-    servingError(error, options.provider, options.entry.origins)
+  const refuse = (error: unknown) => {
+    if (
+      error instanceof ClaustrumAuthError &&
+      (error.code === 'placement-refused' || error.code === 'origin-refused')
+    )
+      options.onRefusal?.(error.code)
+    return servingError(error, options.provider, options.entry.origins)
+  }
   const routes = (
     consumer: ServingConsumer,
     tried: ReadonlySet<string>,

@@ -122,7 +122,7 @@ export async function checkExternalProbe(root = process.cwd()) {
 export async function checkExternals(root = process.cwd()) {
   await checkExternalProbe(root)
   for (const [name, entries] of [
-    ['opencode', ['index', 'server']],
+    ['opencode', ['index', 'server', 'setup-bin']],
     ['pi', ['index']],
   ] as const) {
     const dist = path.join(root, 'packages', name, 'dist')

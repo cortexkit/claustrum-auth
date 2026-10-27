@@ -1,7 +1,3 @@
-export const pluginId = 'cortexkit.claustrum-auth'
-export const command = '/claustrum'
-export const opencodeEnrollment = 'claustrum-auth-opencode'
-export const piEnrollment = 'claustrum-auth-pi'
 export type {
   ActivationEffect,
   ActivationEvent,
@@ -14,6 +10,9 @@ export {
 } from './activation.js'
 export type { CoreFetch, FetchOptions } from './fetch.js'
 export { createFetch, maxBodyBytes } from './fetch.js'
+export type { MenuConsumer, MenuHub, VaultMenuOptions } from './menu.js'
+export { menuUsage, vaultMenuText } from './menu.js'
+export { command, opencodeEnrollment, piEnrollment, pluginId } from './names.js'
 export {
   ClaustrumAuthError,
   checkOrigin,

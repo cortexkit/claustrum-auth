@@ -57,6 +57,20 @@ interface Registered {
 export interface FakeHost {
   ctx: Parameters<typeof setupServer>[0]
   hooks: Map<string, Registered[]>
+  commands: Map<
+    string,
+    {
+      execute(input: {
+        sessionID: string
+        prompt: { text: string }
+      }): Promise<void>
+    }
+  >
+  synthetic: { sessionID: string; text: string; resume: boolean }[]
+  selected: Map<
+    string,
+    { type: 'oauth'; access: string } | { type: 'key'; key: string }
+  >
   /** OAuth methods registered per integration, by method id. */
   methods: Map<
     string,
@@ -73,6 +87,9 @@ export function fakeHost(
   catalog: readonly { id: string; integrationID?: string }[],
 ): FakeHost {
   const hooks = new Map<string, Registered[]>()
+  const commands: FakeHost['commands'] = new Map()
+  const synthetic: FakeHost['synthetic'] = []
+  const selected: FakeHost['selected'] = new Map()
   const methods: FakeHost['methods'] = new Map()
   const providerTransforms = new Set<(editor: unknown) => void>()
   const abort = new AbortController()
@@ -80,7 +97,24 @@ export function fakeHost(
     dispose: async () => remove(),
   })
   const ctx = {
+    command: {
+      transform: async (callback: (editor: unknown) => void) => {
+        const names: string[] = []
+        callback({
+          add(definition: { name: string; execute: never }) {
+            names.push(definition.name)
+            commands.set(definition.name, definition)
+          },
+        })
+        return registration(() => {
+          for (const name of names) commands.delete(name)
+        })
+      },
+    },
     session: {
+      synthetic: async (input: FakeHost['synthetic'][number]) => {
+        synthetic.push(input)
+      },
       hook: async (
         name: string,
         callback: Hook,
@@ -105,6 +139,14 @@ export function fakeHost(
       }),
     },
     integration: {
+      connection: {
+        active: async (provider: string) =>
+          selected.has(provider)
+            ? { type: 'credential', label: 'renamed login', id: provider }
+            : undefined,
+        resolve: async (connection: { id: string }) =>
+          selected.get(connection.id),
+      },
       transform: async (callback: (editor: unknown) => void) => {
         const added: string[] = []
         callback({
@@ -162,7 +204,15 @@ export function fakeHost(
       },
     },
   } as unknown as FakeHost['ctx']
-  return { ctx, hooks, methods, dispose: () => abort.abort() }
+  return {
+    ctx,
+    hooks,
+    methods,
+    commands,
+    synthetic,
+    selected,
+    dispose: () => abort.abort(),
+  }
 }
 
 /** Runs every callback of a hook for a provider, as the host does. */

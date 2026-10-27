@@ -1,7 +1,15 @@
 // The extension's serving, refusal and activation behaviour on the real Pi
 // CLI, with the fixture providers of the test build.
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import {
+  enrollmentAuthority,
+  hostEnrollmentPaths,
+} from '@cortexkit/common-auth/claustrum'
+import { fixtureEntries } from '../../core/test-entry.ts'
+import { setupIO, setupTestBuild } from '../../opencode/test/setup-harness.ts'
 import {
   anyFileContains,
   e2e,
@@ -21,6 +29,69 @@ const authorizations = (requests: { headers: Record<string, unknown> }[]) =>
 setDefaultTimeout(90_000)
 
 describe.skipIf(!e2e)('Pi extension on the real host', () => {
+  test.skipIf(process.env.CLAUSTRUM_AUTH_SETUP_E2E !== '1')(
+    'setup test build enrolls a clean Pi profile and its printed activation asks consent and serves a fixture request',
+    async () => {
+      const original = userAuthText()
+      const { mock, vault, agent, launch } = await world({
+        enrolled: false,
+        rows: [row('setup', 'fixture-a'), row('setup-second', 'fixture-a')],
+        authText: original,
+      })
+      const paths = hostEnrollmentPaths({ stateDir: agent.state, host: 'pi' })
+      expect(existsSync(paths.tokenPath)).toBe(false)
+      const h = setupIO(agent.home, { PI_CODING_AGENT_DIR: agent.agent })
+      await (await setupTestBuild())(
+        ['--yes', '--claustrum', '--host=pi'],
+        h.io,
+        fixtureEntries,
+        async () => ({
+          listScoped: async () =>
+            (await fetch(`${vault.url}/list`, { method: 'POST' })).json(),
+          async getScoped() {
+            throw new Error('setup cannot read keys')
+          },
+          async reportAuthFailureScoped() {},
+          close() {},
+        }),
+      )
+      expect(h.proposals).toEqual(['claustrum-auth-pi'])
+      expect(await enrollmentAuthority(paths, 'claustrum-auth-pi')).toBe(
+        'vault',
+      )
+      expect(h.output()).toContain(path.join(agent.agent, 'claustrum-auth'))
+      expect(await readFile(agent.authPath, 'utf8')).toBe(original)
+      const printed = h
+        .output()
+        .split('\n')
+        .find((line) => line === '/claustrum use fixture-a')
+      expect(printed).toBeDefined()
+      const pi = await launch()
+      expect(await pi.slash(printed as string)).toContain(
+        'fixture-a now uses keys from the Claustrum vault',
+      )
+      expect(pi.confirms).toHaveLength(1)
+      expect(await pi.slash('/claustrum status')).toContain('Vault mode: on')
+      const accounts = await pi.slash('/claustrum accounts')
+      const ids = [...accounts.matchAll(/\[(vault:[^\]]+)\]/gu)].map(
+        (match) => match[1],
+      )
+      expect(ids).toHaveLength(2)
+      expect(
+        await pi.slash(`/claustrum reorder fixture-a ${ids[1]} ${ids[0]}`),
+      ).toContain('order reordered')
+      expect(await pi.slash('/claustrum refusals')).toContain(
+        'Refused vault rows:',
+      )
+      expect(await pi.turn('fixture-a', 'ok')).toMatchObject({
+        text: 'served-ok',
+        error: '',
+      })
+      expect(authorizations(mock.seen)).toEqual([bearerOf('setup-second')])
+      expect(vault.reads).toEqual(['setup-second'])
+    },
+  )
+
   test('class A owned: only the vault key reaches the wire, and release restores the login byte for byte', async () => {
     const original = userAuthText()
     const { mock, vault, agent, launch } = await world({

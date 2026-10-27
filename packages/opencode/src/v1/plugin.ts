@@ -4,6 +4,7 @@ import {
   opencodeEnrollment,
   type ProviderEntry,
   reservedProviders,
+  vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
 import {
@@ -29,6 +30,7 @@ import { providerFetch } from './fetch.js'
 import { ReleasedFlags } from './flags.js'
 import { hostAuthApi } from './host-auth.js'
 import { opencodeAuthFile } from './paths.js'
+import { isPlaceholderEntry } from './placeholder.js'
 
 type Env = Readonly<Record<string, string | undefined>>
 type Core = {
@@ -122,6 +124,7 @@ export async function opencode1Hosts(
   const flags = new ReleasedFlags(stateDir)
   const configEnv = new Map<string, readonly string[]>()
   const configApiKey = new Set<string>()
+  const latestRefusal = new Map<string, string>()
   let catalogEnv: Promise<Map<string, readonly string[]>> | undefined
   const lookupCatalogEnv = async () => {
     const result = (await input.client.provider.list()) as {
@@ -194,7 +197,7 @@ export async function opencode1Hosts(
         [commandName]: {
           template: commandName,
           description:
-            'claustrum-auth: use or release the vault for a provider (use <provider>, release <provider>).',
+            'claustrum-auth plugin: status, accounts, refusals, reorder, use or release a provider.',
         },
       } as typeof config.command
       const loose = config as { provider?: Record<string, ProviderBlock> }
@@ -228,6 +231,7 @@ export async function opencode1Hosts(
           env: () => hostEnvironment(env() as NodeJS.ProcessEnv),
           platform: options.platform,
           discover,
+          onRefusal: (code) => latestRefusal.set(provider, code),
         })
       }
     },
@@ -249,6 +253,28 @@ export async function opencode1Hosts(
         } catch (error) {
           text = `claustrum-auth: ${action} ${provider} failed: ${error instanceof Error ? error.message : String(error)}`
         }
+      } else if (
+        !action ||
+        ['status', 'accounts', 'refusals', 'reorder'].includes(action)
+      ) {
+        text = await vaultMenuText(
+          {
+            authority: async () => {
+              if (options.isCustodyActive)
+                return (await isCustodyActive()) ? 'vault' : 'local'
+              return enrollmentAuthority(paths, opencodeEnrollment)
+            },
+            hub: core.hub,
+            consumers: core.consumers,
+            latestRefusal,
+            providerStatus: async (id) => {
+              if (isPlaceholderEntry(await auth.read(id), id)) return 'owned'
+              return (await flags.isReleased(id)) ? 'released' : 'available'
+            },
+          },
+          hook.arguments,
+        )
+        text += `\n${commandHelp()}`
       } else text = commandHelp()
       await show(hook.sessionID, text)
       // OpenCode 1 has no way for a command hook to finish a command without

@@ -25,12 +25,35 @@ jobs:
       - run: bun run build
       - run: bun run typecheck
       - run: bun run lint
-      - run: bun run test
+      - name: Unit tests, including published setup preview and the vault menu
+        run: bun run test
       - name: Refuse tracked ignored CortexKit files
         shell: bash
         run: |
           tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
           test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
+
+  setup-menu:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: bun install --frozen-lockfile
+      - name: Enroll clean profiles, execute printed commands and serve fixture requests on all three hosts
+        env:
+          CLAUSTRUM_AUTH_SETUP_E2E: '1'
+          CLAUSTRUM_AUTH_OPENCODE1_E2E: '1'
+          CLAUSTRUM_AUTH_OPENCODE2_E2E: '1'
+          CLAUSTRUM_AUTH_PI_E2E: '1'
+        run: bun test packages/opencode/test/opencode1.e2e.test.ts packages/opencode/test/v2/e2e/opencode2.e2e.test.ts packages/pi/test/extension.e2e.test.ts --test-name-pattern 'setup test build' --timeout 600000
 
   # The Pi extension against the real, pinned Pi CLI: serving, refusals,
   # redirects, slots, and the Pi spike of docs/pi-spike.md. Every test

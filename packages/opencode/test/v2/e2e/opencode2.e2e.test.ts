@@ -21,7 +21,14 @@ import { mkdtemp } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  enrollmentAuthority,
+  hostEnrollmentPaths,
+} from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
+import { fixtureEntries } from '../../../../core/test-entry.ts'
+import { resolveOpencodeStateDir } from '../../../src/state-dir.ts'
+import { setupIO, setupTestBuild } from '../../setup-harness.ts'
 import { buildPlugin } from './build-plugin.ts'
 import { removeProfile } from './cleanup.ts'
 import {
@@ -384,11 +391,15 @@ function readSettled(file: string) {
 async function scenario(
   rows: VaultRow[],
   body: (run: Scenario) => Promise<void>,
-  options: { offline?: boolean } = {},
+  options: {
+    offline?: boolean
+    beforeStart?(run: Scenario): Promise<void>
+  } = {},
 ) {
   const run = await Scenario.create(rows, options)
   let failure: unknown
   try {
+    await options.beforeStart?.(run)
     await run.start()
     await body(run)
   } catch (error) {
@@ -502,6 +513,135 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
     expect(probe.stdout.trim()).toBe(env.HOME)
     expect(env.HOME).not.toBe(homedir())
   })
+
+  test.skipIf(process.env.CLAUSTRUM_AUTH_SETUP_E2E !== '1')(
+    'setup test build enrolls a clean OpenCode 2 profile and its printed activation serves a fixture request',
+    async () => {
+      let printed = ''
+      await scenario(
+        [
+          {
+            id: 'setup',
+            providerIds: ['fixture-a'],
+            accountId: 'setup-account',
+          },
+          {
+            id: 'setup-second',
+            providerIds: ['fixture-a'],
+            accountId: 'second-account',
+          },
+        ],
+        async (run) => {
+          expect(await run.credentials('fixture-a')).toEqual([])
+          const args = printed.split(' ')
+          expect(args.shift()).toBe('opencode')
+          const login = await run.cli('printed setup login', [
+            ...args,
+            '--server',
+            run.serverURL,
+          ])
+          expect(login.exit).toBe(0)
+          expect(await run.credentials('fixture-a')).toEqual([
+            expect.objectContaining({
+              methodID: METHOD,
+              access: placeholderSecret('fixture-a'),
+            }),
+          ])
+          const session = (await run.api('POST', '/api/session', {
+            location: { directory: run.project },
+          })) as { data: { id: string } }
+          const strings = (value: unknown): string =>
+            typeof value === 'string'
+              ? value
+              : Array.isArray(value)
+                ? value.map(strings).join('\n')
+                : value && typeof value === 'object'
+                  ? Object.values(value).map(strings).join('\n')
+                  : ''
+          const menu = async (text: string) => {
+            await run.api('POST', `/api/session/${session.data.id}/command`, {
+              name: 'claustrum',
+              text,
+            })
+            return (
+              strings(
+                await run.api('GET', `/api/session/${session.data.id}/inbox`),
+              ) +
+              strings(
+                await run.api('GET', `/api/session/${session.data.id}/message`),
+              )
+            )
+          }
+          const status = await menu('status')
+          expect(status).toContain('Vault mode: on')
+          expect(status).toContain('fixture-a: owned')
+          const accounts = await menu('accounts')
+          const ids = [
+            ...new Set(
+              [...accounts.matchAll(/\[(vault:[^\]]+)\]/gu)].map(
+                (match) => match[1],
+              ),
+            ),
+          ]
+          expect(ids).toHaveLength(2)
+          expect(await menu(`reorder fixture-a ${ids[1]} ${ids[0]}`)).toContain(
+            'order reordered',
+          )
+          expect(await menu('refusals')).toContain('Refused vault rows:')
+          expect((await run.turn('fixture-a')).exit).toBe(0)
+          expect(
+            run.wire({ kind: 'primary' }).map((record) => record.authorization),
+          ).toEqual([`Bearer ${run.vault.secret('setup-second')}`])
+        },
+        {
+          beforeStart: async (run) => {
+            run.env.CLAUSTRUM_AUTH_E2E_SETUP = '1'
+            const stateDir = resolveOpencodeStateDir(run.env, run.env.HOME)
+            const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+            expect(existsSync(paths.tokenPath)).toBe(false)
+            const h = setupIO(run.root, run.env)
+            await (await setupTestBuild())(
+              ['--yes', '--claustrum', '--host=opencode', '--opencode=2'],
+              h.io,
+              fixtureEntries,
+              async () => ({
+                async listScoped() {
+                  return (
+                    await (
+                      await fetch(`${run.vault.url}/list`, { method: 'POST' })
+                    ).json()
+                  ).result
+                },
+                async getScoped() {
+                  throw new Error('setup cannot read keys')
+                },
+                async reportAuthFailureScoped() {},
+                close() {},
+              }),
+            )
+            expect(h.proposals).toEqual(['claustrum-auth-opencode'])
+            expect(
+              JSON.parse(readFileSync(run.configFile, 'utf8')).plugins,
+            ).toEqual([pathToFileURL(pluginDir).href])
+            expect(
+              await enrollmentAuthority(paths, 'claustrum-auth-opencode'),
+            ).toBe('vault')
+            printed =
+              h
+                .output()
+                .split('\n')
+                .find(
+                  (line) =>
+                    line ===
+                    'opencode auth login fixture-a --method claustrum-auth',
+                ) ?? ''
+            expect(printed).not.toBe('')
+          },
+        },
+      )
+    },
+    300_000,
+  )
 
   test('serving: owned bearer, 429 failover, 401 report, class B, class C, misplaced placeholder, wrong origin, user key, reserved', async () => {
     const rows: VaultRow[] = [

@@ -280,6 +280,7 @@ export async function profile(
   name: string,
   mock: Mock,
   control: Partial<VaultControl>,
+  freshEnrollment = false,
 ): Promise<Profile> {
   const scratch = scratchRoot()
   await mkdir(scratch, { recursive: true })
@@ -306,13 +307,14 @@ export async function profile(
     ...control,
   }
   await writeFile(controlFile, JSON.stringify(current))
-  await writeJsonAtomic(
-    hostEnrollmentPaths({
-      stateDir: path.join(dirs.control, 'state'),
-      host: 'opencode',
-    }).tokenPath,
-    { token: '01'.repeat(32), token_generation: 1 },
-  )
+  if (!freshEnrollment)
+    await writeJsonAtomic(
+      hostEnrollmentPaths({
+        stateDir: path.join(dirs.control, 'state'),
+        host: 'opencode',
+      }).tokenPath,
+      { token: '01'.repeat(32), token_generation: 1 },
+    )
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue

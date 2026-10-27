@@ -28,6 +28,9 @@
     "packages/opencode": {
       "name": "@cortexkit/opencode-claustrum-auth",
       "version": "0.0.0",
+      "bin": {
+        "claustrum-auth": "./dist/setup-bin.js",
+      },
       "dependencies": {
         "@cortexkit/claustrum-client": "^0.13.0",
         "@cortexkit/common-auth": "^0.27.0",

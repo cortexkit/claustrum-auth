@@ -187,7 +187,7 @@ type LooseConfig = {
   >
 }
 
-async function pluginHarness() {
+async function pluginHarness(extraRows: ReturnType<typeof row>[] = []) {
   const root = scratchRoot()
   await mkdir(root, { recursive: true })
   const profile = await mkdtemp(path.join(root, 'opencode1-plugin-'))
@@ -203,7 +203,11 @@ async function pluginHarness() {
   const client: ClaustrumScopedClient = {
     async listScoped() {
       return {
-        rows: [row('a'), row('openai', { providerIds: ['openai'] })],
+        rows: [
+          row('a'),
+          ...extraRows,
+          row('openai', { providerIds: ['openai'] }),
+        ],
         view: 'v1',
         grants: undefined,
         grantTuples: undefined,
@@ -362,4 +366,43 @@ test('the command hook runs use and release and ignores other commands', async (
   expect(h.writes).toEqual([`set ${P}`, `remove ${P}`])
   await h.hooks.dispose?.()
   expect(await readdir(h.configDir)).toEqual([])
+})
+
+test('OpenCode 1 claustrum menu lists refusals and accounts, reorders, and remembers an origin refusal without writing host logins', async () => {
+  const h = await pluginHarness([row('b')])
+  const config = { command: {}, provider: {} } as LooseConfig
+  await h.hooks.config?.(config as never)
+  const run = async (args: string) => {
+    await expect(
+      h.hooks['command.execute.before']?.(
+        { command: commandName, arguments: args, sessionID: 's' },
+        { parts: [] },
+      ),
+    ).rejects.toThrow('HANDLED')
+    return h.shown.at(-1) ?? ''
+  }
+  const accounts = await run('accounts')
+  const ids = [...accounts.matchAll(/\[(vault:[^\]]+)\]/gu)].map(
+    (match) => match[1],
+  )
+  expect(ids).toHaveLength(2)
+  expect(await run(`reorder fixture-a ${ids[1]} ${ids[0]}`)).toContain(
+    'order reordered',
+  )
+  const after = await run('accounts')
+  expect(after.indexOf(ids[1] as string)).toBeLessThan(
+    after.indexOf(ids[0] as string),
+  )
+  expect(await run('refusals')).toContain('openai: reserved-provider')
+  await expect(
+    config.provider[P].options.fetch?.('https://wrong.invalid', {
+      headers: bearer,
+    }),
+  ).rejects.toMatchObject({ code: 'origin-refused' })
+  expect(await run('status')).toContain(
+    'Latest request refusal: origin-refused',
+  )
+  expect(h.reads).toEqual([])
+  expect(h.writes).toEqual([])
+  await h.hooks.dispose?.()
 })

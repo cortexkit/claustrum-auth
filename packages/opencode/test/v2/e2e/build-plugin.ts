@@ -1,11 +1,12 @@
 import { existsSync } from 'node:fs'
-import { cp, readFile, realpath, symlink } from 'node:fs/promises'
+import { cp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   bundleOptions,
   runtimeExternals,
 } from '../../../../../scripts/build-options.ts'
+import pluginPackage from '../../../package.json'
 
 async function installedPackage(name: string, from: string) {
   let folder = path.dirname(Bun.resolveSync(name, from))
@@ -65,6 +66,15 @@ export async function buildPlugin(
   })
   if (!build.success)
     throw new Error(`plugin bundle failed: ${build.logs.join('\n')}`)
+  await writeFile(
+    path.join(outdir, 'package.json'),
+    JSON.stringify({
+      name: pluginPackage.name,
+      version: pluginPackage.version,
+      type: 'module',
+      main: './index.js',
+    }),
+  )
 
   if (process.platform === 'win32' || options.copyDependencies) {
     for (const name of runtimeExternals) {

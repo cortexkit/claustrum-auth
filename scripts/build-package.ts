@@ -7,7 +7,8 @@ export async function buildPackage(name: string) {
   const dist = path.join(directory, 'dist')
   await rm(dist, { recursive: true, force: true })
   await mkdir(dist, { recursive: true })
-  const entries = name === 'opencode' ? ['index', 'server'] : ['index']
+  const entries =
+    name === 'opencode' ? ['index', 'server', 'setup-bin'] : ['index']
   for (const entry of entries) {
     const result = await Bun.build({
       ...bundleOptions,

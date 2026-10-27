@@ -1,4 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
+import {
+  enrollmentAuthority,
+  hostEnrollmentPaths,
+} from '@cortexkit/common-auth/claustrum'
+import { fixtureEntries } from '../../core/test-entry.ts'
+import { resolveOpencodeStateDir } from '../src/state-dir.ts'
+import { fixtureClient } from './e2e/fixture-plugin.ts'
 import {
   enabled,
   fixtureProviders,
@@ -16,6 +24,7 @@ import {
   startMock,
   vaultRow,
 } from './e2e/host.ts'
+import { setupIO, setupTestBuild } from './setup-harness.ts'
 
 const A = 'fixture-a'
 const timeout = 300_000 * slow
@@ -74,6 +83,67 @@ describe.skipIf(!enabled)(`OpenCode 1 real host (${process.platform})`, () => {
     mock.reply = () => ({ kind: 'ok' })
     second.reply = () => ({ kind: 'ok' })
   }
+
+  test.skipIf(process.env.CLAUSTRUM_AUTH_SETUP_E2E !== '1')(
+    'setup test build enrolls a clean OpenCode 1 profile and its printed activation serves a fixture request',
+    async () => {
+      reset()
+      const p = await profile(
+        'setup',
+        mock,
+        {
+          rows: [vaultRow('setup', A)],
+          served: { setup: { material: 'setup-vault-key' } },
+        },
+        true,
+      )
+      const paths = hostEnrollmentPaths({
+        stateDir: resolveOpencodeStateDir(p.env, p.env.HOME),
+        host: 'opencode',
+      })
+      expect(existsSync(paths.tokenPath)).toBe(false)
+      expect(existsSync(p.authFile)).toBe(false)
+      const io = setupIO(p.root, p.env)
+      await (await setupTestBuild())(
+        ['--yes', '--claustrum', '--host=opencode', '--opencode=1'],
+        io.io,
+        fixtureEntries,
+        async () => fixtureClient(p.control),
+      )
+      expect(io.proposals).toEqual(['claustrum-auth-opencode'])
+      expect(await enrollmentAuthority(paths, 'claustrum-auth-opencode')).toBe(
+        'vault',
+      )
+      expect((await p.auth())[A]).toBeUndefined()
+      p.env.CLAUSTRUM_AUTH_E2E_SETUP = '1'
+      let h = await host(p)
+      const session = await h.session()
+      const printed = io
+        .output()
+        .split('\n')
+        .find((line) => line === '/claustrum use fixture-a')
+      expect(printed).toBeDefined()
+      expect(
+        await h.command(
+          session,
+          (printed as string).slice('/claustrum '.length),
+        ),
+      ).toContain('now uses the vault')
+      expect(await h.command(session, 'status')).toContain('Vault mode: on')
+      expect(await h.command(session, 'accounts')).toContain('fixture-a')
+      expect(await h.command(session, 'refusals')).toContain(
+        'Refused vault rows:',
+      )
+      await stopAll()
+      h = await host(p)
+      expect((await h.turn(A)).error).toBeUndefined()
+      expect(turns().map((request) => request.headers.authorization)).toEqual([
+        'Bearer setup-vault-key',
+      ])
+      await stopAll()
+    },
+    timeout,
+  )
 
   test(
     'class A owned: /claustrum use writes the placeholder, the next start serves the vault key, and the placeholder never reaches the wire',

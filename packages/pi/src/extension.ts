@@ -15,6 +15,7 @@ import {
   piEnrollment,
   SlotQueue,
   transitionActivation,
+  vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
 import {
@@ -160,6 +161,7 @@ class PiRuntime {
   #syncing = false
   #firstDiscovery: Promise<void> = Promise.resolve()
   #timer: ReturnType<typeof setInterval> | undefined
+  #latestRefusal = new Map<string, string>()
 
   constructor(
     pi: ExtensionAPI,
@@ -339,6 +341,8 @@ class PiRuntime {
         return await serve(input, init)
       } catch (error) {
         const code = refusalCode(error)
+        if (code === 'placement-refused' || code === 'origin-refused')
+          this.#latestRefusal.set(served.provider, code)
         if (code) return refusalResponse(served, code)
         throw error
       }
@@ -509,24 +513,35 @@ class PiRuntime {
     )
   }
 
-  async status(ctx: ExtensionContext) {
+  async status(ctx: ExtensionContext, args = '') {
     // Report after any slot change already queued has finished.
     await this.queue.run(async () => {})
-    const lines = [...this.served.values()].map((served) => {
-      const hidden =
-        served.state.status === 'owned'
-          ? served.models.filter((model) => model.api !== served.api).length
-          : 0
-      return `${served.provider}: ${served.state.status}, ${
-        this.routable(served) ? served.consumer.routingRows().length : 0
-      } vault account(s)${served.state.released ? ', released' : ''}${
-        hidden ? `, ${hidden} model(s) hidden` : ''
-      }`
-    })
+    const authority = await this.#authority()
+    const text = await vaultMenuText(
+      {
+        authority: async () => authority,
+        hub: this.#core.hub,
+        consumers: this.#core.consumers,
+        latestRefusal: this.#latestRefusal,
+        providerStatus: (provider) => {
+          const served = this.served.get(provider)
+          if (!served) return 'unavailable'
+          const hidden =
+            served.state.status === 'owned'
+              ? served.models.filter((model) => model.api !== served.api).length
+              : 0
+          const count = this.routable(served)
+            ? served.consumer.routingRows().length
+            : 0
+          return `${served.state.status}, ${count} vault account(s)${served.state.released ? ', released' : ''}${hidden ? `, ${hidden} model(s) hidden` : ''}`
+        },
+      },
+      args,
+    )
     ctx.ui.notify(
       [
-        `claustrum-auth: vault mode ${this.#notLocal ? 'on' : 'off'}`,
-        ...lines,
+        `claustrum-auth: vault mode ${authority === 'vault' ? 'on' : authority === 'local' ? 'off' : 'unreadable'}`,
+        text,
         usage,
       ].join('\n'),
       'info',
@@ -649,11 +664,12 @@ export function createPiExtension(options: PiExtensionOptions) {
           return
         }
         current.setContext(latest)
-        const [verb, provider] = args.trim().split(/\s+/)
-        if (verb === 'use' && provider) await current.use(provider, ctx)
-        else if (verb === 'release' && provider)
+        const [verb, provider, ...rest] = args.trim().split(/\s+/)
+        if (verb === 'use' && provider && !rest.length)
+          await current.use(provider, ctx)
+        else if (verb === 'release' && provider && !rest.length)
           await current.release(provider, ctx)
-        else await current.status(ctx)
+        else await current.status(ctx, args)
       },
     })
   }

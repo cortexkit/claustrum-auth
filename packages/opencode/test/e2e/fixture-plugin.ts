@@ -29,51 +29,57 @@ const dir = process.env.CLAUSTRUM_AUTH_E2E_DIR ?? ''
 const origin = process.env.CLAUSTRUM_AUTH_E2E_ORIGIN ?? ''
 const control = (): VaultControl =>
   JSON.parse(readFileSync(path.join(dir, 'vault.json'), 'utf8'))
-const log = (entry: Record<string, unknown>) =>
-  appendFileSync(
-    path.join(dir, 'vault-log.jsonl'),
-    `${JSON.stringify(entry)}\n`,
-  )
-const offline = () =>
-  Object.assign(new Error('offline'), { code: 'ECONNREFUSED' })
 
-const client: ClaustrumScopedClient = {
-  async listScoped() {
-    const state = control()
-    log({ op: 'list' })
-    if (state.outage) throw offline()
-    return {
-      rows: state.rows as never,
-      view: createHash('sha256')
-        .update(JSON.stringify(state.rows))
-        .digest('hex')
-        .slice(0, 16),
-      grants: undefined,
-      grantTuples: undefined,
-    }
-  },
-  async getScoped({ credentialId }) {
-    const state = control()
-    log({ op: 'get', credentialId })
-    if (state.outage) throw offline()
-    const served = state.served[credentialId]
-    if (!served) throw new Error('fixture vault has no material')
-    return {
-      credentialId,
-      material: served.material,
-      accountId:
-        served.accountId === null
-          ? undefined
-          : (served.accountId ?? `account-${credentialId}`),
-      recordVersion: served.recordVersion ?? 1,
-      expiresAtMs: null,
-    }
-  },
-  async reportAuthFailureScoped(input) {
-    log({ op: 'report', ...input })
-  },
-  close() {},
+export function fixtureClient(directory: string): ClaustrumScopedClient {
+  const control = (): VaultControl =>
+    JSON.parse(readFileSync(path.join(directory, 'vault.json'), 'utf8'))
+  const log = (entry: Record<string, unknown>) =>
+    appendFileSync(
+      path.join(directory, 'vault-log.jsonl'),
+      `${JSON.stringify(entry)}\n`,
+    )
+  const offline = () =>
+    Object.assign(new Error('offline'), { code: 'ECONNREFUSED' })
+
+  return {
+    async listScoped() {
+      const state = control()
+      log({ op: 'list' })
+      if (state.outage) throw offline()
+      return {
+        rows: state.rows as never,
+        view: createHash('sha256')
+          .update(JSON.stringify(state.rows))
+          .digest('hex')
+          .slice(0, 16),
+        grants: undefined,
+        grantTuples: undefined,
+      }
+    },
+    async getScoped({ credentialId }) {
+      const state = control()
+      log({ op: 'get', credentialId })
+      if (state.outage) throw offline()
+      const served = state.served[credentialId]
+      if (!served) throw new Error('fixture vault has no material')
+      return {
+        credentialId,
+        material: served.material,
+        accountId:
+          served.accountId === null
+            ? undefined
+            : (served.accountId ?? `account-${credentialId}`),
+        recordVersion: served.recordVersion ?? 1,
+        expiresAtMs: null,
+      }
+    },
+    async reportAuthFailureScoped(input) {
+      log({ op: 'report', ...input })
+    },
+    close() {},
+  }
 }
+const client = fixtureClient(dir)
 
 const table = fixtureEntries.map((entry) => ({ ...entry, origins: [origin] }))
 
@@ -84,9 +90,13 @@ const plugin = {
       {
         table,
         createCore: (options) => createTestCore(options, table),
-        stateDir: () => path.join(dir, 'state'),
+        ...(process.env.CLAUSTRUM_AUTH_E2E_SETUP === '1'
+          ? {}
+          : {
+              stateDir: () => path.join(dir, 'state'),
+              isCustodyActive: async () => control().active,
+            }),
         connect: async () => client,
-        isCustodyActive: async () => control().active,
       },
       input,
     ),

@@ -16,6 +16,8 @@ import { writeEnrollmentTokenFile } from '@cortexkit/claustrum-client'
 import {
   type ClaustrumScopedClient,
   ClaustrumUnreachableError,
+  enrollmentAuthority,
+  hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import type { Plugin } from '@opencode/plugin'
@@ -24,6 +26,7 @@ import {
   fixtureEntries,
   type ProviderEntry,
 } from '../../../../core/test-entry.ts'
+import { opencodeStateDir } from '../../../src/state-dir.ts'
 import { setupServer } from '../../../src/v2/setup.ts'
 import { startupError } from './startup-error.ts'
 
@@ -131,12 +134,21 @@ function carries(headers: Headers, value: string) {
 const plugin = {
   id: 'cortexkit.claustrum-auth.e2e',
   async setup(ctx: Plugin.Context) {
-    const tokenPath = path.join(STATE, 'token.json')
+    const fromSetup = process.env.CLAUSTRUM_AUTH_E2E_SETUP === '1'
+    const stateDir = fromSetup ? await opencodeStateDir() : STATE
+    const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+    const authority = fromSetup
+      ? () => enrollmentAuthority(paths, 'claustrum-auth-opencode')
+      : mode
+    const tokenPath = fromSetup
+      ? paths.tokenPath
+      : path.join(STATE, 'token.json')
     log('enrollment-token-start', { tokenPath })
-    await writeEnrollmentTokenFile(tokenPath, {
-      token: '01'.repeat(32),
-      token_generation: 1,
-    })
+    if (!fromSetup)
+      await writeEnrollmentTokenFile(tokenPath, {
+        token: '01'.repeat(32),
+        token_generation: 1,
+      })
     log('enrollment-token-ready')
     const abort = new AbortController()
     const ids = table.map((entry) => entry.hosts.opencode2 as string)
@@ -169,7 +181,7 @@ const plugin = {
     )
     const cleanup = await setupServer(ctx, {
       table,
-      authority: mode,
+      authority,
       createCore: (facts) => {
         log('facts', {
           catalog: facts.catalog.filter((id) => id.startsWith('fixture-')),
@@ -177,9 +189,9 @@ const plugin = {
         const core = createTestCore(
           {
             facts,
-            stateDir: STATE,
+            stateDir,
             tokenPath,
-            isCustodyActive: async () => (await mode()) === 'vault',
+            isCustodyActive: async () => (await authority()) === 'vault',
             connect: async () => client,
           },
           table,

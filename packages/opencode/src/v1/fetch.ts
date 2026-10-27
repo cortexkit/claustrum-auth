@@ -40,6 +40,7 @@ export interface ProviderFetchOptions {
   // succeed? A process that has never listed (a vault down since start) then
   // reports the outage instead of an empty roster.
   discover?: () => Promise<'off' | 'unreachable' | 'listed'>
+  onRefusal?: (code: string) => void
 }
 
 // The `provider.<P>.options.fetch` the config hook installs. Classification,
@@ -84,6 +85,8 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
         'code' in error
       ) {
         const code = String(error.code)
+        if (code === 'placement-refused' || code === 'origin-refused')
+          options.onRefusal?.(code)
         throw new ClaustrumRefusal(
           code,
           code === 'credential-shadowed' && shadowed

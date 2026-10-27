@@ -29,23 +29,32 @@ function configIdentity(configDir: string): string {
 const bindingError =
   'claustrum-auth: state directory belongs to a different OpenCode config directory.'
 
-/** Resolves and binds the shared OpenCode 1/2 state before any runtime writes. */
-export async function opencodeStateDir(
+/** Resolve the shared OpenCode 1/2 state without creating it (setup preview). */
+export function resolveOpencodeStateDir(
   env: Env = process.env,
   home = homedir(),
-): Promise<string> {
+): string {
   const configDir = opencodeConfigDir(env, home)
   const identity = configIdentity(configDir)
   const key =
     identity === configIdentity(path.resolve(home, '.config', 'opencode'))
       ? 'opencode'
       : `opencode-${createHash('sha256').update(identity).digest('hex').slice(0, 16)}`
-  const stateDir = path.resolve(
+  return path.resolve(
     env.XDG_STATE_HOME || path.join(home, '.local', 'state'),
     'cortexkit',
     'claustrum-auth',
     key,
   )
+}
+
+/** Resolves and binds the shared OpenCode 1/2 state before any runtime writes. */
+export async function opencodeStateDir(
+  env: Env = process.env,
+  home = homedir(),
+): Promise<string> {
+  const identity = configIdentity(opencodeConfigDir(env, home))
+  const stateDir = resolveOpencodeStateDir(env, home)
   const manifest = path.join(stateDir, 'config-dir.json')
   // Serialize first use so two hosts cannot replace a binding they never read.
   await withLock(

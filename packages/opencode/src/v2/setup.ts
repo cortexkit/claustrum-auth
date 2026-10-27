@@ -1,14 +1,19 @@
 import {
+  command,
   type HostFacts,
+  type MenuConsumer,
+  type MenuHub,
   type ProviderEntry,
   pluginId,
   reservedProviders,
   type ServingConsumer,
+  vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
 import type { ClaustrumDiscoveryHub } from '@cortexkit/common-auth/claustrum'
 import {
   installOpenCode2Auth,
   type OpenCode2AuthInstallation,
+  placeholderSecret,
   registerOpenCode2AuthMethods,
 } from '@cortexkit/common-auth/opencode2'
 import type { Plugin } from '@opencode/plugin'
@@ -26,8 +31,8 @@ export const vaultMethodLabel = 'Claustrum vault (claustrum-auth plugin)'
 
 /** What the entry builds once the host's catalog is known. */
 export interface ServerCore {
-  hub: Pick<ClaustrumDiscoveryHub, 'start' | 'refresh' | 'dispose'>
-  consumers: ReadonlyMap<string, ServingConsumer>
+  hub: Pick<ClaustrumDiscoveryHub, 'start' | 'refresh' | 'dispose'> & MenuHub
+  consumers: ReadonlyMap<string, ServingConsumer & MenuConsumer>
   entries: readonly ProviderEntry[]
 }
 
@@ -50,7 +55,7 @@ export interface ServerDeps {
 
 export type SetupContext = Pick<
   Plugin.Context,
-  'session' | 'event' | 'integration' | 'provider'
+  'session' | 'event' | 'integration' | 'provider' | 'command'
 >
 
 /**
@@ -112,6 +117,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
     return id !== undefined && !reservedProviders.some((r) => r === id)
   })
   const ids = entries.map((entry) => entry.hosts.opencode2 as string)
+  const latestRefusal = new Map<string, string>()
 
   let core: Promise<ServerCore> | undefined
   const ready = () => {
@@ -155,6 +161,43 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
   }
 
   try {
+    const registration = await ctx.command.transform((editor) => {
+      editor.add({
+        name: command.slice(1),
+        description:
+          'claustrum-auth plugin: status, accounts, refusals and reorder',
+        execute: async (input) => {
+          const built = await ready()
+          const text = await vaultMenuText(
+            {
+              authority: deps.authority,
+              hub: built.hub,
+              consumers: built.consumers,
+              latestRefusal,
+              providerStatus: async (provider) => {
+                const active = await ctx.integration.connection.active(provider)
+                const value =
+                  active?.type === 'credential'
+                    ? await ctx.integration.connection.resolve(active)
+                    : undefined
+                return value?.type === 'oauth' &&
+                  value.access === placeholderSecret(provider)
+                  ? 'owned'
+                  : 'available (select the vault login to activate)'
+              },
+            },
+            input.prompt.text.trim().replace(/^\/claustrum(?:\s+|$)/u, ''),
+          )
+          await ctx.session.synthetic({
+            sessionID: input.sessionID,
+            text,
+            delivery: input.delivery,
+            resume: false,
+          })
+        },
+      })
+    })
+    disposers.push(() => registration.dispose())
     for (const entry of entries) {
       const provider = entry.hosts.opencode2 as string
       const marks = new Map<string, number>()
@@ -181,6 +224,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
           rateLimitMarks: marks,
           now,
           onError: deps.onError,
+          onRefusal: (code) => latestRefusal.set(provider, code),
         }),
         {
           gateOnPlaceholder: {
@@ -190,7 +234,10 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
                 ? value.slice('Bearer '.length)
                 : undefined
             },
-            refuseMisplaced: (header) => placementText(provider, header),
+            refuseMisplaced: (header) => {
+              latestRefusal.set(provider, 'placement-refused')
+              return placementText(provider, header)
+            },
           },
         },
       )

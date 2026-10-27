@@ -14,6 +14,9 @@
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "claustrum-auth": "./dist/setup-bin.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
