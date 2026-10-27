@@ -19,7 +19,7 @@ vault row must look like for the provider to be served.
 | openrouter | `openrouter` | `openrouter` | `openrouter` | `openrouter` | `https://openrouter.ai` |
 | typesafe | `typesafe` | `typesafe` | `typesafe` | — | `https://api.typesafe.ai` |
 | meta | `meta` | `meta` | `meta` | `meta` | `https://api.meta.ai` |
-| xai | `xai` | `xai` | — | `xai` | `https://api.x.ai` |
+| xai | `xai` | `xai` | `xai` | `xai` | `https://api.x.ai`; WebSocket handshake on OpenCode 2: `wss://api.x.ai` |
 | opencode-go | `opencode-go` | `opencode-go` | `opencode-go` | `opencode-go` | `https://opencode.ai` |
 | opencode-zen | `opencode` | `opencode` | — | `opencode` | `https://opencode.ai` |
 
@@ -90,7 +90,7 @@ pins, which carry the catalogs the hosts themselves use:
 | openrouter | `openrouter`, base `https://openrouter.ai/api/v1` | `providers/openrouter.js`, base `https://openrouter.ai/api/v1` | yes |
 | typesafe | `typesafe`, base `https://api.typesafe.ai/v1/`, api `typesafe-system-one` | `providers/typesafe-ai.js`, base `https://api.typesafe.ai/v1`, `AuthOptions.bearer` | OpenCode yes; Pi's api does not take a caller `fetch` |
 | meta | `meta` (`providers/meta.js`), base `https://api.meta.ai/v1`, `openai-responses`, 6 models | `providers/meta.js`, base `https://api.meta.ai/v1`; responses, chat and messages routes all use `AuthOptions.bearer(input, "META_API_KEY")` | yes |
-| xai | `xai` (`providers/xai.js`), base `https://api.x.ai/v1`, `openai-responses`, 4 models | `providers/xai.js`, base `https://api.x.ai/v1`, `AuthOptions.bearer(options, "XAI_API_KEY")`; WebSocket transport by default on OpenCode 2 (design section 7.4) | yes over HTTP |
+| xai | `xai` (`providers/xai.js`), base `https://api.x.ai/v1`, `openai-responses`, 4 models | `providers/xai.js`, base `https://api.x.ai/v1`, `AuthOptions.bearer(options, "XAI_API_KEY")`; WebSocket transport by default on OpenCode 2 (below) | yes, over HTTP and in the WebSocket handshake |
 | opencode-go | `opencode-go` (`providers/opencode-go.js`), four apis, models at `https://opencode.ai/inference/go` (see below) | per model (see below) | per model |
 | opencode-zen | `opencode` (`providers/opencode.js`), five apis, models at `https://opencode.ai/inference` (see below) | `providers/opencode.js` (TypeSafe System One at `https://opencode.ai/inference/systemone/v1`, bearer) plus per-model drivers | per model |
 
@@ -99,15 +99,101 @@ Host rules that follow:
 - **typesafe is OpenCode only.** Pi registers `typesafe` with its
   `typesafe-system-one` api, which never reaches the caller `fetch`, so the
   plugin's fetch cannot see a typesafe request on Pi (design section 9.2).
-- **xai is not on OpenCode 2.** OpenCode 2's xAI provider sends the key in a
-  WebSocket handshake by default, which needs its own redirect, origin and
-  redaction proof (design section 7.4, slice 13). OpenCode 1 sends xAI over
-  HTTP through `options.fetch` (design section 8.4) and Pi through the caller
-  `fetch` of `openai-responses`.
+- **xai is served over WebSocket on OpenCode 2.** See "xAI on OpenCode 2"
+  below. OpenCode 1 sends xAI over HTTP through `options.fetch` (design
+  section 8.4) and Pi through the caller `fetch` of `openai-responses`.
 - **opencode-zen is not on OpenCode 2.** OpenCode 2's built-in Console plugin
   reads the stored `opencode` credential and calls the Console with it outside
   the request hooks (design section 5.2, class D). OpenCode 1's `opencode`
   loader only checks that a key is stored (design section 8.4).
+
+## xAI on OpenCode 2
+
+OpenCode 2.0.32 sends xAI turns over a WebSocket. Citations prefixed `oc:` are
+the host's source at tag `v2.0.32` (`github.com/anomalyco/opencode`); the
+same code is in the minified bundle of the pinned `@opencode/cli` 2.0.32
+binary, which is what the real-host tests run.
+
+**Which requests use the socket.** The built-in xAI plugin sets
+`settings.transport` to `websocket` for provider id `xai` unless the
+configuration sets it (`oc:packages/core/src/plugin/provider/xai.ts:98-104`).
+The session opens a socket only for a model whose transport is `websocket`
+(`oc:packages/core/src/session/model-request.ts:368-392`); everything else of
+the provider, and every session that fell back (below), goes over HTTP
+through `http.request`, served as for every other provider. The xAI
+Responses route builds the socket URL from the base URL plus `/responses`,
+`https:` becoming `wss:` (`@opencode/ai` 2.0.32
+`dist/providers/xai.js:12-24`, `dist/route/transport/websocket.js:105-125`),
+so the default target is `wss://api.x.ai/v1/responses`. A user sets
+`providers.xai.settings.transport` to `http` to turn the socket off.
+
+**Where the key goes, and when.** Route auth writes `authorization: Bearer
+<stored credential>` while the transport is prepared, after `model.request`
+has run, so a header set in `model.request` loses to it
+(`oc:packages/core/src/session/model-request.ts:304-320`,
+`oc:packages/ai/src/route/auth.ts:46-71`). The handshake hook then receives
+the prepared URL and headers, with the plugin's placeholder in
+`authorization`, and whatever it returns is what the socket is opened with
+(`oc:packages/core/src/session/model-transport.ts:309-345`). The plugin
+therefore writes the vault key there:
+
+1. its own `experimental.ws.handshake` hook, registered before common-auth's
+   installer, checks a handshake carrying the placeholder against the
+   entry's `handshakeOrigins` (`wss://api.x.ai`, scheme, host and port) and
+   refuses any other origin with a fixed message, before an account is
+   chosen or the vault read;
+2. the installer refuses a placeholder outside `Authorization`, chooses the
+   account, and asks `accountHeaders`, which reads the vault only for the
+   handshake whose origin step 1 passed;
+3. `rewriteHandshakeURL` refuses the handshake if its URL is no longer the one
+   step 1 checked (another plugin's hook in between moved it), before the key
+   is written; then `Authorization: Bearer <vault key>` replaces the
+   placeholder, and the installer's wire guard checks that no placeholder is
+   left.
+
+An `http.request` of the same session clears what step 1 left, so an HTTP
+request never reads the vault before its own origin check.
+
+**One read per send; the socket follows the key.** The host runs the handshake
+hook for every model call, also when the session's socket is already open,
+and reuses the socket only while the URL and every header value are
+unchanged (`oc:packages/core/src/session/model-transport.ts:116-138,309-345`).
+So the vault is read for every turn, the same key keeps the socket, and a
+changed key (another account, a rotated key, the user's own key after a
+login switch) opens a new one. A login switch or a revoked vault mode reaches
+an open socket at the next send: the hook refuses or passes it through
+before the host picks the socket. xAI's sockets are also rotated after 24
+minutes (`dist/providers/xai.js:13`).
+
+**Failures.** A handshake that does not open (any non-101 answer, a redirect,
+a refused connection) moves that session to HTTP for good: the host keeps a
+per-session flag and later turns skip the socket
+(`oc:packages/core/src/session/model-transport.ts:308-310,343-363`). The
+HTTP request is served normally. No hook sees a handshake's status, so a
+handshake 401 is not reported; the HTTP request that follows it is, once. A
+handshake hook that throws (the plugin's refusals) fails the turn without the
+HTTP fallback, and the host shows its own "Failed to read
+xai/xai-responses stream" while logging the plugin's fixed refusal as the
+cause.
+
+**Redirects.** The host opens sockets with Bun's `WebSocket` (with `ws` and
+`followRedirects: false` outside Bun,
+`oc:packages/core/src/effect/websocket-constructor.ts:58-79`); the real-host
+test shows the pinned binary follows no handshake redirect at all, cross- or
+same-origin, and the second origin never sees the key.
+
+**Frames.** Received frames pass the plugin's `experimental.ws.receive` hook,
+which removes every key served into that socket from error frames before the
+host's driver reads them. Error frames carry the provider's status: a 429 is
+a limit on the account (the retry moves the turn to the next account, on a
+new socket), a 401 is reported once for the receipt that socket was served.
+
+**Voice.** Grok Voice does not use these hooks. The host's voice service
+looks for an `env` or `key` connection of the `xai` integration and needs a
+resolved API key (`/realtime/client_secrets` over plain HTTP); it never reads
+the plugin's OAuth-typed placeholder, so with the vault owning xAI it asks
+for an API key and the vault key never reaches it (the `Voice.session` code
+in the pinned binary, the host's `Realtime.connect` for `xai-realtime`).
 
 ## OpenCode Go and OpenCode Zen: bearer models only
 
@@ -252,7 +338,7 @@ the one exact credential id above.
 | `apikey:kimi-for-coding` | `kimi-code-plan-global` | `llm-provider` | `kimi-for-coding` on OpenCode 1 and 2, `kimi-coding` on Pi |
 | `apikey:cline-pass` | none | `llm-provider` | cline-pass on OpenCode 1 and 2, by its exact credential id; refused `not-on-this-host` on Pi |
 | `oauth:meta` | `meta` | `llm-provider,meta-native` | meta on every host, once the vault serves its expiry (above) |
-| `oauth:xai` | `xai` | `llm-provider,xai-native` | xai on OpenCode 1 and Pi; refused `not-on-this-host` on OpenCode 2 |
+| `oauth:xai` | `xai` | `llm-provider,xai-native` | xai on every host; on OpenCode 2 over HTTP and in the WebSocket handshake |
 | `apikey:opencode-go` | `opencode-go` | `llm-provider` | opencode-go on every host, bearer models only |
 | `apikey:opencode-zen` | `opencode` | `llm-provider` | opencode on OpenCode 1 and Pi, bearer models only; refused `not-on-this-host` on OpenCode 2 |
 
@@ -277,10 +363,12 @@ as supported" rules (section 14.4) still apply per host:
 1. the host's catalog knows the id, and on OpenCode 2 the integration id equals
    the provider id — checked at classification, per request;
 2. the per-driver transport audit for that host version — the plugin serves
-   only through OpenCode 2's `http.request` hook, OpenCode 1's `options.fetch`
-   and Pi's caller `fetch`. These drivers reach the key through the SDK's
-   bearer option, which that seam sees; a per-host audit of the pinned host
-   versions is still owed before each entry is called proven;
+   only through OpenCode 2's `http.request` hook (and, for xAI alone, its
+   `experimental.ws.handshake` hook, audited in "xAI on OpenCode 2"),
+   OpenCode 1's `options.fetch` and Pi's caller `fetch`. These drivers reach
+   the key through the SDK's bearer option, which that seam sees; a per-host
+   audit of the pinned host versions is still owed before each entry is
+   called proven;
 3. the driver and header match the table above;
 4. the origin is recorded and the wrong-origin case passes, on each host;
 5. the echoed-credential redaction case passes;

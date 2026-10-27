@@ -47,12 +47,13 @@ Command per provider (the method id is `claustrum-auth`):
 | openrouter | `opencode auth login openrouter --method claustrum-auth` |
 | typesafe | `opencode auth login typesafe --method claustrum-auth` |
 | meta | `opencode auth login meta --method claustrum-auth` |
+| xai | `opencode auth login xai --method claustrum-auth` |
 | opencode-go | `opencode auth login opencode-go --method claustrum-auth` |
 
-xai and opencode-zen are not served on OpenCode 2 (`docs/providers.md`): check
-in step 1 that `/claustrum refusals` lists `oauth:xai` and
-`apikey:opencode-zen` as `not-on-this-host`, and that neither `xai` nor
-`opencode` offers the claustrum-auth login method.
+opencode-zen is not served on OpenCode 2 (`docs/providers.md`): check in
+step 1 that `/claustrum refusals` lists `apikey:opencode-zen` as
+`not-on-this-host`, and that `opencode` does not offer the claustrum-auth
+login method.
 
 Steps, per provider:
 
@@ -164,9 +165,12 @@ Run these on top of the host's steps above:
   expiry"): record it for the vault's owner as a vault defect. A 401 on a
   later turn is the short-lifetime case: one report, then the next turn
   answers on a freshly minted key.
-- **xai**: OpenCode 1 and Pi only. **Pass:** a turn answers. On OpenCode 2,
-  **pass** when the row is listed as `not-on-this-host` and no claustrum-auth
-  login method exists for `xai`.
+- **xai**: **Pass:** a turn answers. On OpenCode 2 the turn goes over a
+  WebSocket to `wss://api.x.ai` (`docs/providers.md`, "xAI on OpenCode 2"):
+  send a second prompt in the same session and **pass** when it answers too
+  (the open socket is reused, with a fresh vault read). If the host logs
+  "session websocket connect failed; using http", record it: the session
+  then runs over HTTP, which is also served.
 - **opencode-go**: send one prompt to a bearer model (OpenCode:
   `glm-5.3` or another OpenAI-shaped model; Pi: a model the owned form
   offers) and **pass** when it answers. On OpenCode 1 and 2, then pick an

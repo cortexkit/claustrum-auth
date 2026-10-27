@@ -50,6 +50,14 @@ from response headers before the host sees them. The host's own transport
 errors (a refused or reset connection) carry no request URL on OpenCode
 2.0.32, which the real-host tests check.
 
+**xAI over WebSocket.** OpenCode 2 sends xAI turns over a WebSocket by
+default. The plugin puts the vault key into that socket's handshake, as
+`Authorization: Bearer`, only when the handshake goes to `wss://api.x.ai`,
+and checks that before it reads the vault. Error frames on the socket reach
+the host without the key. A handshake that fails moves the session to HTTP,
+which is served as above. `docs/providers.md` ("xAI on OpenCode 2") has the
+details and the host source they rest on.
+
 ## Several accounts
 
 Accounts are tried in roster order. A 429 sets the account aside until its
@@ -97,6 +105,11 @@ folder. No old state is migrated.
   only with `CLAUSTRUM_AUTH_OPENCODE2_E2E=1` (the `opencode2-e2e` CI job, on
   Linux, macOS and Windows) because it installs the CLI with npm.
   `CLAUSTRUM_AUTH_OPENCODE2_E2E_CLI_DIR` may point at an existing install.
+  Two of its cases run xAI over the host's WebSocket against the mock's
+  socket: the handshake key, one vault read per send, socket reuse, frame
+  limits and reports, redaction, the sticky HTTP fallback, a login switch
+  and a revocation on an open socket, the handshake redirect proof, and a
+  handshake to another origin refused before any vault read.
 
 ### Real-host startup diagnostics
 
