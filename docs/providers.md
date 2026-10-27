@@ -70,7 +70,7 @@ pins, which carry the catalogs the hosts themselves use:
   models, grouped by api, each with its `baseUrl`). Pi registers a provider
   through one api, so a provider whose models are not `openai-completions` or
   `openai-responses` is not listed there.
-- **OpenCode 2** `@opencode/ai` 2.0.32, `dist/providers/*.js` (the driver
+- **OpenCode 2** `@opencode/ai` 2.2.0, `dist/providers/*.js` (the driver
   defaults and the auth option each route uses).
 - **OpenCode 1** uses the same provider ids as OpenCode 2: the table gives it
   the OpenCode ids, and its entry wraps every listed provider's
@@ -109,28 +109,28 @@ Host rules that follow:
 
 ## xAI on OpenCode 2
 
-OpenCode 2.0.32 sends xAI turns over a WebSocket. Citations prefixed `oc:` are
-the host's source at tag `v2.0.32` (`github.com/anomalyco/opencode`); the
-same code is in the minified bundle of the pinned `@opencode/cli` 2.0.32
+OpenCode 2.2.0 sends xAI turns over a WebSocket. Citations prefixed `oc:` are
+the host's source at tag `v2.2.0` (`github.com/anomalyco/opencode`); the
+same code is in the minified bundle of the pinned `@opencode/cli` 2.2.0
 binary, which is what the real-host tests run.
 
 **Which requests use the socket.** The built-in xAI plugin sets
 `settings.transport` to `websocket` for provider id `xai` unless the
-configuration sets it (`oc:packages/core/src/plugin/provider/xai.ts:98-104`).
+configuration sets it (`oc:packages/core/src/plugin/provider/xai.ts:98-105`).
 The session opens a socket only for a model whose transport is `websocket`
-(`oc:packages/core/src/session/model-request.ts:368-392`); everything else of
+(`oc:packages/core/src/session/model-request.ts:354-378`); everything else of
 the provider, and every session that fell back (below), goes over HTTP
 through `http.request`, served as for every other provider. The xAI
 Responses route builds the socket URL from the base URL plus `/responses`,
-`https:` becoming `wss:` (`@opencode/ai` 2.0.32
-`dist/providers/xai.js:12-24`, `dist/route/transport/websocket.js:105-125`),
+`https:` becoming `wss:` (`@opencode/ai` 2.2.0
+`dist/providers/xai.js:12-20`, `dist/route/transport/websocket.js:104-129`),
 so the default target is `wss://api.x.ai/v1/responses`. A user sets
 `providers.xai.settings.transport` to `http` to turn the socket off.
 
 **Where the key goes, and when.** Route auth writes `authorization: Bearer
 <stored credential>` while the transport is prepared, after `model.request`
 has run, so a header set in `model.request` loses to it
-(`oc:packages/core/src/session/model-request.ts:304-320`,
+(`oc:packages/core/src/session/model-request.ts:303-319`,
 `oc:packages/ai/src/route/auth.ts:46-71`). The handshake hook then receives
 the prepared URL and headers, with the plugin's placeholder in
 `authorization`, and whatever it returns is what the socket is opened with
@@ -242,10 +242,10 @@ Both OpenCode hosts take the per-model driver from models.dev: a model's
 `provider.npm` when it has one, else the provider's `npm`. Read from
 `https://models.dev/api.json` on 2026-10-27 (`$["opencode-go"].models[*].provider`
 and `$["opencode"].models[*].provider`). OpenCode 2 starts from the snapshot
-bundled with 2.0.32 and OpenCode 1 loads the live catalog, so the model lists
+bundled with 2.2.0 and OpenCode 1 loads the live catalog, so the model lists
 can drift; the header rule per driver does not. The header each driver sends
-is from `@opencode/ai` 2.0.32 `dist/providers/`: `openai.js:30`,
-`openai-compatible.js:13` and `mistral.js:12` use `AuthOptions.bearer`;
+is from `@opencode/ai` 2.2.0 `dist/providers/`: `openai.js:31`,
+`openai-compatible.js:11` and `mistral.js:12` use `AuthOptions.bearer`;
 `anthropic.js:12` sends `x-api-key` and `google.js:17` sends
 `x-goog-api-key`. OpenCode 1's AI SDK packages of the same names send the same
 headers.

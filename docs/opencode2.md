@@ -48,7 +48,7 @@ locally, with no vault read and nothing sent, when:
 The served key is removed from error bodies, from streamed error events and
 from response headers before the host sees them. The host's own transport
 errors (a refused or reset connection) carry no request URL on OpenCode
-2.0.32, which the real-host tests check.
+2.2.0, which the real-host tests check.
 
 **xAI over WebSocket.** OpenCode 2 sends xAI turns over a WebSocket by
 default. The plugin puts the vault key into that socket's handshake, as

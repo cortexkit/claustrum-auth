@@ -57,7 +57,7 @@ import {
 
 const ENABLED = process.env.CLAUSTRUM_AUTH_OPENCODE2_E2E === '1'
 const REUSE_CLI_DIR = process.env.CLAUSTRUM_AUTH_OPENCODE2_E2E_CLI_DIR
-export const OPENCODE_CLI_VERSION = '2.0.32'
+export const OPENCODE_CLI_VERSION = '2.2.0'
 const PASSWORD = 'claustrum-auth-e2e-loopback-only'
 const METHOD = 'claustrum-auth'
 
@@ -1287,7 +1287,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
           ),
       ).toEqual([])
       // Control: the host's WebSocket client does not follow a handshake
-      // redirect at all on 2.0.32, not even to the same origin, so the zero
+      // redirect at all on 2.2.0, not even to the same origin, so the zero
       // above is not a redirect stripping the header: nothing is followed.
       // The second origin's own recorder is shown to catch a handshake key
       // in the wrong-origin scenario below.
