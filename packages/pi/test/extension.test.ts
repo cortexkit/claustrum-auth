@@ -2,12 +2,12 @@ import { expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import { harness } from '../../core/test/fakes.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
@@ -130,8 +130,10 @@ async function servedTurn(options: {
   })
   process.env.PI_CODING_AGENT_DIR = agent.agent
   let registered: Record<string, unknown> | undefined
-  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<void>> =
-    {}
+  const handlers: Record<
+    string,
+    (event: unknown, ctx: unknown) => Promise<void>
+  > = {}
   const pi = {
     on(name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) {
       handlers[name] = handler
