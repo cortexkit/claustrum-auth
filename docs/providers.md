@@ -214,18 +214,24 @@ key read (`dist/claustrum/custody.js:542-554`):
 - it refuses the served credential as `insufficient-validity` when
   `expires_at_ms` is null, or when less than five minutes remain.
 
-claustrum-client 0.13.0 decodes `expires_at_ms` as a number or null
-(`dist/wire.js:68-74`), so the plugin serves Meta only if the vault sends a
-finite expiry for the minted key. Whether it does cannot be settled from this
-repository's code: it is the vault's behaviour.
+The vault serves the minted Meta key with a real `expires_at_ms`, never null
+(answered by the vault's owner, 2026-10-27). It holds Meta's identity token
+and serves only the key it mints from it. The expiry is the first of these
+that exists:
 
-**Open question for CKCRED:** does `get_scoped` for `oauth:meta` return the
-minted inference key with a non-null `expires_at_ms`, and is that expiry
-always more than five minutes away when served (honouring `min_ttl_ms`)? If it
-is null, every Meta request is refused locally with `insufficient-validity`
-and the fix belongs to the vault (serve the expiry, or store the minted key as
-an `api_key` row), not to the plugin (design section 11.1). The live smoke
-(`docs/live-smoke.md`) shows the answer on the first Meta turn.
+1. the expiry in Meta's mint reply (`expires_at_ms`, `expires_at` as seconds
+   or RFC 3339, or `expires_in`);
+2. otherwise the key's own JWT `exp`, if the key is a JWT;
+3. otherwise mint time plus 24 hours, an assumption the vault states and tests.
+
+A malformed expiry fails the vault's refresh; it is never replaced by the
+fallback. Because the row is refreshable, asking with `min_ttl_ms` 300000
+makes the vault mint a fresh key once the current one has less than five
+minutes left, so custody's check holds as it stands.
+
+If Meta's real key lifetime is shorter than the 24-hour assumption, a key can
+stop working early. The plugin then gets a 401, reports it once for the record
+version it was served, and the vault mints a new key.
 
 xAI is an OAuth row too, so the same rule applies to `oauth:xai`.
 

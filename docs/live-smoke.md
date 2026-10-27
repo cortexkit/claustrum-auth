@@ -158,11 +158,12 @@ Steps, per provider:
 
 Run these on top of the host's steps above:
 
-- **meta**: the first turn is the answer to the open question in
-  `docs/providers.md` ("Meta: the served token's expiry"). **Pass:** the
-  turn answers. If it fails locally with `insufficient-validity` and nothing
-  reaches Meta, the vault served the minted key without an expiry (or with
-  less than five minutes left): record it for CKCRED, it is a vault fix.
+- **meta**: **Pass:** the turn answers. A local `insufficient-validity`
+  refusal with nothing sent to Meta means the vault served no usable expiry,
+  which it should never do (`docs/providers.md`, "Meta: the served token's
+  expiry"): record it for the vault's owner as a vault defect. A 401 on a
+  later turn is the short-lifetime case: one report, then the next turn
+  answers on a freshly minted key.
 - **xai**: OpenCode 1 and Pi only. **Pass:** a turn answers. On OpenCode 2,
   **pass** when the row is listed as `not-on-this-host` and no claustrum-auth
   login method exists for `xai`.
