@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { phaseClock } from '../phase-clock.ts'
@@ -143,6 +144,29 @@ test('an owned request is served in order: origin, authorize, Authorization; not
   expect(vault.reads).toEqual(['a1'])
   for (const [, value] of sent.request.headers)
     expect(value).not.toContain(placeholderSecret('fixture-a'))
+})
+
+test("a route withdrawn after it was chosen is refused with the plugin's own text and sends nothing", async () => {
+  // OpenCode 2 chose the account from the roster; the plugin then authorizes
+  // it for the send, and the vault reports the route disabled, removed or
+  // changed since that read.
+  const { host, lastCore } = await startServer()
+  await login(host, 'fixture-a')
+  const consumer = lastCore()?.consumers.get('fixture-a')
+  if (!consumer) throw new Error('no fixture-a consumer')
+  consumer.authorize = async () => {
+    throw new ClaustrumConsumerError(
+      'route-unavailable',
+      'Claustrum route is disabled, removed or changed',
+    )
+  }
+  const error = await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+  ).catch((e) => e)
+  expect(error.message).toContain('no longer serves this account for fixture-a')
+  expect(error.message).not.toContain('Claustrum route is disabled')
 })
 
 test('a wrong origin is refused before any vault read, and the refusal never sees a secret', async () => {

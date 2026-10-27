@@ -134,11 +134,14 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
 }
 
 // The consumer's own refusals that mean the vault cannot serve this request.
-// Their library text is replaced by the plugin's fixed text for the user.
+// Their library text is replaced by the plugin's fixed text for the user. A
+// route the vault no longer serves (disabled, removed or changed after the
+// roster read) fails at authorize, which is past that read and short of the
+// send, so it is told apart from a roster that listed no account.
 function vaultFailure(error: unknown) {
   if (!(error instanceof Error) || !('kind' in error)) return undefined
   if (error.kind === 'unavailable') return 'vault-unreachable'
   if (error.kind === 'not-active') return 'vault-mode-off'
-  if (error.kind === 'route-unavailable') return 'no-vault-account'
+  if (error.kind === 'route-unavailable') return 'route-gone'
   return undefined
 }

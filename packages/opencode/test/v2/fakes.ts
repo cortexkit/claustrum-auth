@@ -376,11 +376,14 @@ export async function startServer(
       table.map((entry) => ({ id: entry.hosts.opencode2 as string })),
   )
   const errors: unknown[] = []
+  // The core setup builds, for a test that withdraws a route on the consumer
+  // the plugin holds.
+  let core: ReturnType<typeof createTestCore> | undefined
   const deps: ServerDeps = {
     table: options.table ?? table,
     authority: async () => vault.mode,
-    createCore: (facts) =>
-      createTestCore(
+    createCore: (facts) => {
+      core = createTestCore(
         {
           facts,
           stateDir: dir,
@@ -393,7 +396,9 @@ export async function startServer(
           },
         },
         options.table ?? table,
-      ),
+      )
+      return core
+    },
     onError: (error) => errors.push(error),
   }
   const dispose = await setupServer(host.ctx, deps)
@@ -402,7 +407,7 @@ export async function startServer(
     host.dispose()
     await dispose()
   })
-  return { host, vault, errors, dir }
+  return { host, vault, errors, dir, lastCore: () => core }
 }
 
 let sessions = 0

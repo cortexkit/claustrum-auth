@@ -1,8 +1,5 @@
 import { ClaustrumAuthError } from '@cortexkit/claustrum-auth-core'
-import {
-  ClaustrumConsumerError,
-  ClaustrumCredentialError,
-} from '@cortexkit/common-auth/claustrum'
+import { ClaustrumCredentialError } from '@cortexkit/common-auth/claustrum'
 
 // Every text the OpenCode 2 entry shows is fixed. None of them interpolates
 // request data (URL, header values, vault replies), so a refusal can never
@@ -14,6 +11,10 @@ const fix =
 
 export function noAccountText(provider: string) {
   return `claustrum-auth plugin: no vault account for ${provider}. Grant one with ck auth, then try again.`
+}
+
+export function routeGoneText(provider: string) {
+  return `claustrum-auth plugin: the Claustrum vault no longer serves this account for ${provider}; it was disabled, removed or changed after the plugin read it. Nothing was sent. Sign in with "Claustrum vault (claustrum-auth plugin)" again to pick up the vault's current accounts, or switch ${provider} back to your own key.`
 }
 
 export function unreachableText(provider: string) {
@@ -74,6 +75,8 @@ function refusalText(
       return `claustrum-auth plugin: the request URL for ${provider} has no account segment the plugin can fill, so it was not sent.`
     case 'no-vault-account':
       return noAccountText(provider)
+    case 'route-gone':
+      return routeGoneText(provider)
     case 'vault-mode-off':
       return vaultOffText(provider)
     default:
@@ -106,18 +109,15 @@ export function servingError(
   provider: string,
   origins: readonly string[],
 ): Error {
+  // Flatten first: the adapter rethrows what this returns, so an error still
+  // carrying a consumer `kind` would be read as the consumer's own refusal.
+  const failure = vaultFailureText(error, provider)
+  if (failure !== undefined) return new Error(failure)
   const code = refusalOf(error)
   if (code) {
     const fixed = new ClaustrumAuthError(code)
     fixed.message = refusalText(code, provider, origins)
     return fixed
-  }
-  if (error instanceof ClaustrumConsumerError) {
-    if (error.kind === 'unavailable')
-      return new Error(unreachableText(provider))
-    if (error.kind === 'not-active') return new Error(vaultOffText(provider))
-    if (error.kind === 'route-unavailable' || error.kind === 'route-declined')
-      return new Error(noAccountText(provider))
   }
   if (error instanceof ClaustrumCredentialError)
     return new Error(vaultRefusedText(provider))
@@ -125,4 +125,36 @@ export function servingError(
   return new Error(
     `claustrum-auth plugin: the request for ${provider} could not be served from the vault.`,
   )
+}
+
+/**
+ * The fixed text for the consumer's own refusals that mean the vault cannot
+ * serve this request, or undefined for any other error. A route the vault no
+ * longer serves (disabled, removed or changed after the roster read) fails at
+ * authorize, which is past that read and short of the send, so it gets its own
+ * text rather than "no account".
+ */
+function vaultFailureText(error: unknown, provider: string) {
+  // The core rethrows a consumer refusal through its credential redactor,
+  // which keeps `kind` but drops the class, so the kind alone decides.
+  const kind = ownKind(error)
+
+  if (kind === 'unavailable') return unreachableText(provider)
+  if (kind === 'not-active') return vaultOffText(provider)
+  if (kind === 'route-unavailable') return routeGoneText(provider)
+  if (kind === 'route-declined') return noAccountText(provider)
+  return undefined
+}
+
+// Read only a field the error holds itself: a getter could run anything, and
+// an inherited value belongs to some other object.
+function ownKind(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'kind')
+    return typeof descriptor?.value === 'string' ? descriptor.value : undefined
+  } catch {
+    // An exotic object, such as a Proxy, may refuse the lookup.
+    return undefined
+  }
 }

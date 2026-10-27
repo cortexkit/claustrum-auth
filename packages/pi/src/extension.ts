@@ -21,7 +21,6 @@ import {
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
 import {
   type ClaustrumConsumer,
-  ClaustrumConsumerError,
   type ClaustrumScopedClient,
   connectClaustrumScopedClient,
   enrollmentAuthority,
@@ -115,10 +114,11 @@ function refusalResponse(served: Served, code: string) {
 
 // Core rethrows errors from the serving loop through the credential redactor,
 // which keeps an error's name and string code but not its class, so refusals
-// are recognised by those two fields.
+// are recognised by those two fields. A consumer refusal keeps its `kind`
+// there but not its class, so the kind decides first.
 function refusalCode(error: unknown): string | undefined {
-  if (error instanceof ClaustrumConsumerError)
-    return consumerRefusal(error.kind)
+  const kind = ownKind(error)
+  if (kind !== undefined) return consumerRefusal(kind)
   if (!(error instanceof Error)) return undefined
   const code = (error as { code?: unknown }).code
   if (error.name === 'ClaustrumAuthError' && typeof code === 'string')
@@ -128,6 +128,19 @@ function refusalCode(error: unknown): string | undefined {
   return undefined
 }
 
+// Read only a field the error holds itself: a getter could run anything, and
+// an inherited value belongs to some other object.
+function ownKind(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'kind')
+    return typeof descriptor?.value === 'string' ? descriptor.value : undefined
+  } catch {
+    // An exotic object, such as a Proxy, may refuse the lookup.
+    return undefined
+  }
+}
+
 function consumerRefusal(kind: string) {
   switch (kind) {
     case 'unavailable':
@@ -135,6 +148,7 @@ function consumerRefusal(kind: string) {
     case 'not-active':
       return 'vault-mode-off'
     case 'route-unavailable':
+      return 'route-gone'
     case 'route-declined':
       return 'no-vault-account'
     default:
