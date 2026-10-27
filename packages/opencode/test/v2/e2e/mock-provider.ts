@@ -4,6 +4,7 @@
 // record every request they receive, headers included, so a test can check
 // exactly what reached the wire. Values recorded here are loopback test
 // credentials served by the fake vault, never production secrets.
+import { createServer, type Socket } from 'node:net'
 
 export interface WireRecord {
   readonly server: 'mock' | 'other'
@@ -64,15 +65,25 @@ const bearerOf = (headers: Headers) =>
 export interface MockProvider {
   readonly url: string
   readonly otherURL: string
+  /**
+   * An origin that accepts a connection, reads the request line and closes
+   * the connection unanswered: the host's client fails with a transport
+   * error after following a redirect there.
+   */
+  readonly resetURL: string
+  /** Request lines the reset origin read, with any bearer value removed. */
+  readonly resets: string[]
   readonly records: WireRecord[]
   /** Queues what the next agent-loop requests get, in order. */
   next(...behaviors: Behavior[]): void
+  /** Drops every queued behavior. */
+  clear(): void
   /** Resolves once `count` agent-loop requests have arrived. */
   waitForPrimaries(count: number, ms?: number): Promise<boolean>
   stop(): Promise<void>
 }
 
-export function startMockProvider(): MockProvider {
+export async function startMockProvider(): Promise<MockProvider> {
   const records: WireRecord[] = []
   const queue: Behavior[] = []
   let replies = 0
@@ -149,12 +160,35 @@ export function startMockProvider(): MockProvider {
       }
     },
   })
+  const resets: string[] = []
+  const sockets = new Set<Socket>()
+  const reset = createServer((socket) => {
+    sockets.add(socket)
+    socket.once('data', (data) => {
+      resets.push(
+        String(data)
+          .split('\r\n')[0]
+          ?.replace(/leak\/\S+/, 'leak/<bearer>') ?? '',
+      )
+      socket.destroy()
+    })
+    socket.on('close', () => sockets.delete(socket))
+    socket.on('error', () => {})
+  })
+  await new Promise<void>((resolve) => reset.listen(0, '127.0.0.1', resolve))
+  const address = reset.address()
+  const resetPort = typeof address === 'object' && address ? address.port : 0
   return {
     url: `http://127.0.0.1:${mock.port}`,
     otherURL: `http://127.0.0.1:${other.port}`,
+    resetURL: `http://127.0.0.1:${resetPort}`,
+    resets,
     records,
     next(...behaviors) {
       queue.push(...behaviors)
+    },
+    clear() {
+      queue.length = 0
     },
     async waitForPrimaries(count, ms = 60_000) {
       const deadline = Date.now() + ms
@@ -168,6 +202,8 @@ export function startMockProvider(): MockProvider {
     async stop() {
       await mock.stop(true)
       await other.stop(true)
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => reset.close(() => resolve()))
     },
   }
 }

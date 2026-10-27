@@ -162,15 +162,21 @@ test('a placeholder outside Authorization is refused before selection, with zero
   const { host, vault } = await startServer()
   await login(host, 'fixture-a')
   const before = vault.reads.length
-  for (const headers of [
-    { 'x-api-key': placeholderSecret('fixture-a') },
-    { ...bearer('fixture-a'), 'x-api-key': placeholderSecret('fixture-a') },
-  ]) {
+  for (const [headers, text] of [
+    [
+      { 'x-api-key': placeholderSecret('fixture-a') },
+      'sends its key for fixture-a in x-api-key',
+    ],
+    [
+      { ...bearer('fixture-a'), 'x-api-key': placeholderSecret('fixture-a') },
+      'carries the key for fixture-a in more than one header',
+    ],
+  ] as const) {
     await expect(
       send(host, 'fixture-a', post(`${origin}/v1`, headers)),
     ).rejects.toMatchObject({
       kind: 'placement-refused',
-      message: expect.stringContaining('sends its key for fixture-a in'),
+      message: expect.stringContaining(text),
     })
   }
   expect(vault.reads.length).toBe(before)

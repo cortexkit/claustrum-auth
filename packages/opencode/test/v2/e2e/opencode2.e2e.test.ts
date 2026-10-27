@@ -34,7 +34,11 @@ import {
   stopHost,
   within,
 } from './host.ts'
-import { type MockProvider, startMockProvider } from './mock-provider.ts'
+import {
+  type Behavior,
+  type MockProvider,
+  startMockProvider,
+} from './mock-provider.ts'
 
 const ENABLED = process.env.CLAUSTRUM_AUTH_OPENCODE2_E2E === '1'
 const REUSE_CLI_DIR = process.env.CLAUSTRUM_AUTH_OPENCODE2_E2E_CLI_DIR
@@ -103,8 +107,8 @@ class Scenario {
     spawnSync('git', ['init', '-q'], { cwd: this.project })
     this.log = path.join(root, 'plugin.jsonl')
     writeFileSync(this.log, '')
+    // Created by the plugin entry's private writer, as setup does.
     this.state = path.join(root, 'claustrum-state')
-    mkdirSync(this.state, { recursive: true })
     this.env = isolatedEnv(root, {
       OPENCODE_SERVER_PASSWORD: PASSWORD,
       OPENCODE_PASSWORD: PASSWORD,
@@ -126,7 +130,7 @@ class Scenario {
     const root = await mkdtemp(path.join(tmpdir(), 'claustrum-auth-oc2-'))
     const vault = startFakeVault(rows)
     vault.offline = options.offline ?? false
-    return new Scenario(root, startMockProvider(), vault)
+    return new Scenario(root, await startMockProvider(), vault)
   }
 
   async start() {
@@ -570,7 +574,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
       const sent = run.mock.records.length
       const refusals = {
         'fixture-c': 'only serves keys sent in Authorization',
-        'fixture-h': 'sends its key for fixture-h in x-api-key',
+        'fixture-h': 'carries the key for fixture-h in more than one header',
         'fixture-o': `the vault key for fixture-o is only sent to ${run.mock.url}`,
       }
       for (const [provider, message] of Object.entries(refusals)) {
@@ -618,21 +622,37 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
       expect(body.output).toContain('invalid key')
       expect(`${body.output}${sse.output}`).not.toContain(secret)
 
-      // A thrown transport error whose URL carries the key: a 307 to a dead
-      // loopback port with the key in the path. The host follows it and
-      // fails to connect, then retries and is answered.
-      const dead = await freePort()
-      mock.next({
+      // A thrown transport error whose URL carries the key: a 307 to
+      // another loopback origin with the key in the path, which reads the
+      // request line and closes the connection unanswered. The host follows
+      // it and fails with a transport error on every retry, until it gives
+      // up and shows the error.
+      const leak: Behavior = {
         type: 'redirect',
         status: 307,
-        location: (bearer) => `http://127.0.0.1:${dead}/leak/${bearer}`,
-      })
-      await run.turn('fixture-a')
-      expect(
-        run
-          .wire({ kind: 'primary' })
-          .filter((record) => record.behavior === 'redirect'),
-      ).toHaveLength(1)
+        location: (bearer) => `${mock.resetURL}/leak/${bearer}`,
+      }
+      mock.next(...Array.from({ length: 12 }, () => leak))
+      const thrown = await run.turn('fixture-a')
+      mock.clear()
+      // The host did follow the redirect into the closed connection, so the
+      // checks below cover a real transport error carrying the key in its URL.
+      const followed = mock.resets.filter((line) =>
+        line.includes('/leak/<bearer>'),
+      )
+      expect(followed.length).toBeGreaterThan(0)
+      const shown = thrown.output
+        .split('\n')
+        .filter((line) => line.includes('"type":"error"'))
+      console.log(
+        `THROWN-TRANSPORT-ERROR-TURN: ${JSON.stringify({
+          exit: thrown.exit,
+          followed: followed.length,
+          shown: shown.map((line) => line.slice(0, 600)),
+        })}`,
+      )
+      expect(shown.length).toBeGreaterThan(0)
+      expect(thrown.output).not.toContain(secret)
 
       // 14.3: every cross-origin redirect status, then the two controls.
       const statuses = [301, 302, 303, 307, 308]
@@ -756,23 +776,30 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
           expect.objectContaining({ type: 'key' }),
         ])
 
-        // The plugin's own files are owner-only on POSIX. Windows DACLs are
-        // checked by common-auth's private-files job, which owns the writers.
+        // The plugin's own files are owner-only on POSIX: the state
+        // directory (created by common-auth's private writer, as setup does)
+        // is 0700 and every file in it 0600, so no other user reaches them
+        // whatever the modes of the roster subdirectories, which are printed
+        // for the record. Windows DACLs are checked by common-auth's
+        // private-files job, which owns the writers.
         if (!isWindows) {
-          const modes: string[] = []
+          const files: string[] = []
+          const dirs: string[] = []
           const visit = (dir: string) => {
             for (const entry of readdirSync(dir, { withFileTypes: true })) {
               const file = path.join(dir, entry.name)
-              const mode = statSync(file).mode & 0o777
+              const mode = (statSync(file).mode & 0o777).toString(8)
               if (entry.isDirectory()) {
-                if (mode !== 0o700) modes.push(`${file} ${mode.toString(8)}`)
+                dirs.push(`${path.relative(run.state, file)} ${mode}`)
                 visit(file)
-              } else if (mode !== 0o600)
-                modes.push(`${file} ${mode.toString(8)}`)
+              } else files.push(`${path.relative(run.state, file)} ${mode}`)
             }
           }
-          visit(path.join(run.state, 'rosters'))
-          expect(modes).toEqual([])
+          visit(run.state)
+          console.log(`STATE-MODES: ${JSON.stringify({ dirs, files })}`)
+          expect((statSync(run.state).mode & 0o777).toString(8)).toBe('700')
+          expect(files.length).toBeGreaterThan(1)
+          expect(files.filter((entry) => !entry.endsWith(' 600'))).toEqual([])
         }
         expect(run.leaks(rows.map((row) => vault.secret(row.id)))).toEqual([])
       },
@@ -784,6 +811,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
     const rows: VaultRow[] = [
       { id: 'a1', providerIds: ['fixture-a'] },
       { id: 'a2', providerIds: ['fixture-a'] },
+      { id: 'h1', providerIds: ['fixture-h'] },
     ]
     await scenario(rows, async (run) => {
       const { vault, mock } = run
@@ -841,7 +869,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         `PLACEMENT-REFUSED-RETRY: ${JSON.stringify({
           exit: refused.exit,
           shown: refused.output.includes(
-            'sends its key for fixture-h in x-api-key',
+            'carries the key for fixture-h in more than one header',
           ),
           hostRetries: hostRetries.map((entry) => entry.error),
         })}`,
@@ -908,6 +936,25 @@ function resetProof(events: PluginEvent[]) {
   }
   return {
     sessions: sessions.size,
+    timeline: Object.fromEntries(
+      [...sessions.keys()].map((sessionID) => [
+        sessionID.slice(-6),
+        events
+          .filter((entry) => String(entry.sessionID) === sessionID)
+          .map((entry) =>
+            entry.event === 'execution'
+              ? String(entry.type).replace('session.execution.', '')
+              : entry.event === 'transport'
+                ? `transport:${entry.kind}`
+                : entry.event,
+          )
+          .filter(
+            (token) =>
+              !['select', 'limit', 'host-retry', 'retry'].includes(token),
+          )
+          .join(' '),
+      ]),
+    ),
     transports: events.filter((entry) => entry.event === 'transport').length,
     terminals: events.filter(
       (entry) =>

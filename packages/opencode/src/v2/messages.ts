@@ -29,6 +29,10 @@ export function vaultRefusedText(provider: string) {
 }
 
 export function placementText(provider: string, header: string) {
+  // The installer names the first header that carries the placeholder; when
+  // that is Authorization itself, the refusal is that another one does too.
+  if (header.toLowerCase() === 'authorization')
+    return `claustrum-auth plugin: this request carries the key for ${provider} in more than one header; the claustrum-auth plugin only serves keys sent in Authorization alone.`
   return `claustrum-auth plugin: this model's driver sends its key for ${provider} in ${header}; the claustrum-auth plugin only serves keys sent in Authorization.`
 }
 

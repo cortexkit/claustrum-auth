@@ -12,11 +12,11 @@
 // account ids, kinds, sessions, and whether a header was the placeholder.
 import { appendFileSync } from 'node:fs'
 import path from 'node:path'
+import { writeEnrollmentTokenFile } from '@cortexkit/claustrum-client'
 import {
   type ClaustrumScopedClient,
   ClaustrumUnreachableError,
 } from '@cortexkit/common-auth/claustrum'
-import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import type { Plugin } from '@opencode/plugin'
 import {
@@ -129,7 +129,7 @@ export default {
   id: 'cortexkit.claustrum-auth.e2e',
   async setup(ctx: Plugin.Context) {
     const tokenPath = path.join(STATE, 'token.json')
-    await writeJsonAtomic(tokenPath, {
+    await writeEnrollmentTokenFile(tokenPath, {
       token: '01'.repeat(32),
       token_generation: 1,
     })
