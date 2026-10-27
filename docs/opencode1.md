@@ -41,7 +41,8 @@ every OS.
 
 `packages/opencode/test/opencode1.e2e.test.ts` runs pinned OpenCode 1.19.3
 against a loopback mock provider, with the fixture providers and a fake vault.
-It covers sections 14.2 and 14.3 of the design. It is skipped unless
+It covers serving, failover, the redirect proof, redaction, the shadow check
+and `/claustrum use`/`release` under concurrent logins. It is skipped unless
 `CLAUSTRUM_AUTH_OPENCODE1_E2E=1` is set:
 
 ```sh

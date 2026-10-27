@@ -96,8 +96,9 @@ export function opencode1Hosts(
         options.connect ??
         (() => connectClaustrumScopedClient({ connectionFile })),
       isCustodyActive,
-      // Every opencode1 id in the table was audited against OpenCode 1's
-      // catalog before it was listed (design section 14.4).
+      // The plugin cannot see OpenCode 1's models catalog from its config
+      // hook, so the table stands in for it: an entry gets an opencode1 id
+      // only once OpenCode 1's catalog is known to carry that provider.
       facts: { host: 'opencode1', catalog },
     })
     core.hub.start()

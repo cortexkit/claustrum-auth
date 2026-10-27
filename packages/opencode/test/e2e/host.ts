@@ -1,5 +1,5 @@
-// Real-host tests on pinned OpenCode 1 (design sections 14.2 and 14.3), with
-// the fixture providers and a loopback mock. Gated: set
+// Harness for real-host tests on pinned OpenCode 1, with the fixture
+// providers and a loopback mock. Gated: set
 // CLAUSTRUM_AUTH_OPENCODE1_E2E=1. The host is installed from npm into
 // target/opencode1-host unless CLAUSTRUM_AUTH_OPENCODE1_DIR names an existing
 // install. Runs on Linux, macOS and Windows.

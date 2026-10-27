@@ -32,8 +32,9 @@ jobs:
           tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
           test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
 
-  # Sections 14.2 and 14.3 of the design on the pinned OpenCode 1 host. The
-  # test installs opencode-ai into target/opencode1-host on first use.
+  # Real-host tests on the pinned OpenCode 1 host: serving, redirects,
+  # redaction and activation. The test installs opencode-ai into
+  # target/opencode1-host on first use.
   opencode1-e2e:
     strategy:
       fail-fast: false

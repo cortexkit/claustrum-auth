@@ -34,8 +34,8 @@ const placeholder = { type: 'api', key: placeholderFor(P) }
 
 // A fake of OpenCode 1's auth API with its real write semantics: `set` and
 // `remove` read the whole file, change one key and write the whole file back,
-// so another writer landing inside a write is lost. Hooks pause the plugin at
-// each point the design names.
+// so another writer landing inside a write is lost. Hooks run before each
+// read, inside a write after its snapshot is taken, and after the write.
 function fakeAuth(initial: Record<string, unknown> = {}) {
   const file: Record<string, unknown> = structuredClone(initial)
   const writes: string[] = []

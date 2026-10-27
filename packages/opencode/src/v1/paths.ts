@@ -3,8 +3,9 @@ import path from 'node:path'
 
 type Env = Readonly<Record<string, string | undefined>>
 
-// OpenCode's config directory, as section 3.1 of the design resolves it on
-// every OS (xdg-basedir does not special-case Windows).
+// OpenCode's config directory on every OS: OPENCODE_CONFIG_DIR when set, else
+// $XDG_CONFIG_HOME/opencode, else <home>/.config/opencode (xdg-basedir does
+// not special-case Windows).
 export function opencodeConfigDir(env: Env = process.env): string {
   if (env.OPENCODE_CONFIG_DIR?.trim())
     return path.resolve(env.OPENCODE_CONFIG_DIR)
