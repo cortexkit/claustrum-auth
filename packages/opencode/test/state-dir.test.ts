@@ -14,7 +14,11 @@ import {
 import path from 'node:path'
 import { hostEnrollmentPaths } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
-import { opencodeConfigDir, opencodeStateDir } from '../src/state-dir.ts'
+import {
+  opencodeConfigDir,
+  opencodeStateDir,
+  resolveOpencodeStateDir,
+} from '../src/state-dir.ts'
 import { ReleasedFlags } from '../src/v1/flags.ts'
 import { productionDeps } from '../src/v2/vault.ts'
 import { scratchRoot } from './scratch-root.ts'
@@ -109,6 +113,29 @@ test('different XDG_CONFIG_HOME paths to the same real config folder share a key
   expect(first).toBe(second)
   expect(explicit).toBe(first)
   expect(path.basename(first)).toMatch(/^opencode-[0-9a-f]{16}$/)
+})
+
+test('a config folder created later under an aliased parent keeps the state folder setup bound', async () => {
+  const { root, home, env } = await profile()
+  const real = path.join(root, 'real-xdg')
+  const alias = path.join(root, 'alias-xdg')
+  await mkdir(real)
+  await symlink(real, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const options = { ...env, XDG_CONFIG_HOME: alias }
+  // Setup runs before OpenCode has created its config folder.
+  const preview = resolveOpencodeStateDir(options, home)
+  const bound = await opencodeStateDir(options, home)
+  expect(bound).toBe(preview)
+  await mkdir(path.join(alias, 'opencode'))
+  // The host starts once the folder exists and must find the same state.
+  expect(resolveOpencodeStateDir(options, home)).toBe(bound)
+  expect(await opencodeStateDir(options, home)).toBe(bound)
+  expect(
+    JSON.parse(await readFile(path.join(bound, 'config-dir.json'), 'utf8')),
+  ).toEqual({
+    version: 1,
+    configDir: realpathSync.native(path.join(real, 'opencode')),
+  })
 })
 
 test('an XDG_CONFIG_HOME alias of the home config folder still uses the default key', async () => {

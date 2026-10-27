@@ -18,11 +18,33 @@ export function opencodeConfigDir(
   )
 }
 
+/**
+ * The config folder's canonical spelling, whether or not it exists yet.
+ *
+ * A folder that does not exist yet is named by the canonical spelling of its
+ * deepest existing parent plus the missing names. Otherwise the identity, and
+ * with it the state key, would change once OpenCode creates the folder: an
+ * alias such as a symlinked parent, macOS `/var` (really `/private/var`) or a
+ * Windows 8.3 short name (`C:\Users\RUNNER~1`) only resolves to its real
+ * spelling for a path that exists. Setup would then enroll in one state
+ * folder and the host would look for the enrollment in another.
+ */
 function configIdentity(configDir: string): string {
-  try {
-    return realpathSync.native(configDir)
-  } catch {
-    return configDir
+  const missing: string[] = []
+  let current = configDir
+  for (;;) {
+    try {
+      return path.join(realpathSync.native(current), ...missing)
+    } catch (error) {
+      const parent = path.dirname(current)
+      if (
+        (error as NodeJS.ErrnoException).code !== 'ENOENT' ||
+        parent === current
+      )
+        return configDir
+      missing.unshift(path.basename(current))
+      current = parent
+    }
   }
 }
 

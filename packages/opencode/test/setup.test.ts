@@ -12,7 +12,7 @@ import { createTestCore, fixtureEntries } from '../../core/test-entry.ts'
 import { runClaustrumSetup, vaultOnlyMessage } from '../src/setup.ts'
 import { resolveOpencodeStateDir } from '../src/state-dir.ts'
 import { scratchRoot } from './scratch-root.ts'
-import { setupIO, setupTestBuild } from './setup-harness.ts'
+import { isVersionProbe, setupIO, setupTestBuild } from './setup-harness.ts'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -70,7 +70,8 @@ test('published setup dry run names both enrollments, exact grants and native ac
   expect(existsSync(path.join(root, 'state'))).toBe(false)
   expect(existsSync(path.join(root, 'config'))).toBe(false)
   expect(existsSync(path.join(root, 'pi'))).toBe(false)
-  expect(h.commands.every(({ args }) => args.includes('--version'))).toBe(true)
+  expect(h.commands.length).toBeGreaterThan(0)
+  expect(h.commands.every(isVersionProbe)).toBe(true)
   const node = Bun.which('node')
   expect(node).not.toBeNull()
   const cli = spawnSync(node as string, [bin, '--not-a-setup-flag'], {
@@ -152,7 +153,8 @@ test('setup refuses local sign-in and delegates enroll-only without host registr
   )
   expect(result?.hosts).toEqual(['pi'])
   expect(h.proposals).toEqual(['claustrum-auth-pi'])
-  expect(h.commands.every(({ args }) => args.includes('--version'))).toBe(true)
+  expect(h.commands.length).toBeGreaterThan(0)
+  expect(h.commands.every(isVersionProbe)).toBe(true)
   expect(
     existsSync(path.join(root, 'config', 'opencode', 'opencode.json')),
   ).toBe(false)

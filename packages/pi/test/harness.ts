@@ -388,10 +388,17 @@ export async function agentDir(options: AgentOptions = {}) {
       path.join(agent, 'auth.json'),
       JSON.stringify(options.auth, null, 2),
     )
-  // Setup creates the plugin's folder owner-only before it enrolls.
+  // Setup creates the plugin's folder owner-only before it enrolls, so an
+  // enrolled profile starts with it. A profile that is not enrolled yet has no
+  // such folder, and setup creates it. Pre-creating it here would not match
+  // setup on Windows: Node ignores the mode there, the folder keeps the
+  // permissions it inherits, and the enrollment token may not be written into
+  // a folder that is not owner-only.
   const state = path.join(agent, 'claustrum-auth')
-  mkdirSync(state, { recursive: true, mode: 0o700 })
-  if (options.enrolled ?? true) await enroll(agent)
+  if (options.enrolled ?? true) {
+    mkdirSync(state, { recursive: true, mode: 0o700 })
+    await enroll(agent)
+  }
   if (options.flags)
     await writeJsonAtomic(path.join(state, 'pi-activation.json'), {
       version: 1,

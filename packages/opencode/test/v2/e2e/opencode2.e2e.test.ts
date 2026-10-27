@@ -144,7 +144,14 @@ class Scenario {
   }
 
   static async create(rows: VaultRow[], options: { offline?: boolean } = {}) {
-    const root = await mkdtemp(path.join(tmpdir(), 'claustrum-auth-oc2-'))
+    // The host's real spelling of the folder. The CLI processes report their
+    // working folder by its real path (macOS temp is /var/..., really
+    // /private/var/...), and the host sets the plugin up once per project
+    // folder it is named. A session made through the API with the other
+    // spelling would get its own plugin, whose menu a CLI turn never sees.
+    const root = realpathSync.native(
+      await mkdtemp(path.join(tmpdir(), 'claustrum-auth-oc2-')),
+    )
     const vault = startFakeVault(rows)
     vault.offline = options.offline ?? false
     return new Scenario(root, await startMockProvider(), vault)
@@ -589,9 +596,17 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
           )
           expect(await menu('refusals')).toContain('Refused vault rows:')
           expect((await run.turn('fixture-a')).exit).toBe(0)
+          // Named by vault row, not by bearer: CI masks the fake bearers in a
+          // failing diff, and the row says which account served.
+          const rowOf = (authorization: string | null) =>
+            ['setup', 'setup-second'].find(
+              (id) => authorization === `Bearer ${run.vault.secret(id)}`,
+            ) ?? 'not a setup row'
           expect(
-            run.wire({ kind: 'primary' }).map((record) => record.authorization),
-          ).toEqual([`Bearer ${run.vault.secret('setup-second')}`])
+            run
+              .wire({ kind: 'primary' })
+              .map((record) => rowOf(record.authorization)),
+          ).toEqual(['setup-second'])
         },
         {
           beforeStart: async (run) => {

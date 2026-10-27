@@ -21,6 +21,25 @@ export function setupTestBuild() {
   return fixtureSetup
 }
 
+/**
+ * Whether a command setup ran is a host `--version` probe and nothing else.
+ * On Windows a `.cmd` launcher can only run through cmd.exe, so the probe
+ * arrives as `cmd.exe /d /s /c ""<launcher>" --version"`.
+ */
+export function isVersionProbe(command: {
+  file: string
+  args: readonly string[]
+}) {
+  const { file, args } = command
+  if (process.platform === 'win32' && /^cmd\.exe$/iu.test(file))
+    return (
+      args.length === 4 &&
+      args.slice(0, 3).join(' ') === '/d /s /c' &&
+      /^""[^"]+\.cmd" --version"$/iu.test(args[3] ?? '')
+    )
+  return args.length === 1 && args[0] === '--version'
+}
+
 /** The real setup ceremony and file writers, with deterministic CLI discovery
  * and approval transport. Host activation still runs through each real host. */
 export function setupIO(
@@ -28,6 +47,12 @@ export function setupIO(
   overrides: Record<string, string | undefined> = {},
 ) {
   const bin = path.join(root, 'bin with spaces')
+  // Only the fake launchers may be on the search path. An inherited `Path`
+  // (how Windows spells it) would otherwise sit next to `PATH`, and setup reads
+  // whichever spelling comes first, so it would search the runner's real PATH.
+  const inherited = Object.fromEntries(
+    Object.entries(overrides).filter(([key]) => key.toUpperCase() !== 'PATH'),
+  )
   const env = {
     HOME: root,
     USERPROFILE: root,
@@ -38,7 +63,7 @@ export function setupIO(
     XDG_CONFIG_HOME: path.join(root, 'config'),
     XDG_CACHE_HOME: path.join(root, 'cache'),
     PI_CODING_AGENT_DIR: path.join(root, 'pi'),
-    ...overrides,
+    ...inherited,
     PATH: bin,
   }
   const proposals: string[] = []
