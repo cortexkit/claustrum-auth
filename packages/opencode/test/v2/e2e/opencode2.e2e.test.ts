@@ -1,8 +1,8 @@
 // The OpenCode 2 entry on the real host: the pinned `@opencode/cli` runs the
 // test build of the entry (plugin-entry.ts) against a loopback mock provider
 // and a fake vault, and each case checks what reached the wire, the vault and
-// the host's own records. Section 14.2 and the 14.3 HTTP redirect proof of
-// the design. It needs the network once to install the CLI, so it runs only
+// the host's own records, including the proof that a cross-origin redirect
+// never carries the vault key. It needs the network once to install the CLI, so it runs only
 // with CLAUSTRUM_AUTH_OPENCODE2_E2E=1 (its own CI job, on Linux, macOS and
 // Windows). CLAUSTRUM_AUTH_OPENCODE2_E2E_CLI_DIR may point at a directory that
 // already holds the pinned install, to skip it while iterating.
@@ -321,7 +321,7 @@ class Scenario {
         if (entry.isDirectory()) visit(file)
         else if (entry.isFile()) {
           files.push(path.relative(this.root, file))
-          const bytes = readFileSync(file)
+          const bytes = readSettled(file)
           for (const needle of this.secrets)
             if (bytes.includes(needle))
               leaks.push(`${path.relative(this.root, file)}: ${needle}`)
@@ -356,6 +356,21 @@ class Scenario {
       maxRetries: 10,
       retryDelay: 200,
     })
+  }
+}
+
+/**
+ * Reads a file the stopped host wrote. Windows releases a killed process's
+ * files a moment after it exits, so a sharing error is retried briefly.
+ */
+function readSettled(file: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return readFileSync(file)
+    } catch (error) {
+      if (!isWindows || attempt >= 20) throw error
+      Bun.sleepSync(250)
+    }
   }
 }
 
@@ -630,7 +645,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
     })
   }, 600_000)
 
-  test('redaction and the 14.3 redirect proof: echoed keys, a thrown transport error, cross-origin redirects with controls', async () => {
+  test('redaction and the redirect proof: echoed keys, a thrown transport error, cross-origin redirects with controls', async () => {
     await scenario([{ id: 'a1', providerIds: ['fixture-a'] }], async (run) => {
       const { vault, mock } = run
       const secret = vault.secret('a1')
@@ -676,7 +691,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
       expect(shown.length).toBeGreaterThan(0)
       expect(thrown.output).not.toContain(secret)
 
-      // 14.3: every cross-origin redirect status, then the two controls.
+      // Every cross-origin redirect status, then the two controls.
       const statuses = [301, 302, 303, 307, 308]
       for (const status of statuses) {
         mock.next({

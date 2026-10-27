@@ -34,7 +34,8 @@ jobs:
 
   # The OpenCode 2 entry on the real pinned host (@opencode/cli, see
   # OPENCODE_CLI_VERSION in the test) against a loopback mock provider and a
-  # fake vault: section 14.2 of the design and the 14.3 HTTP redirect proof.
+  # fake vault, including the proof that a cross-origin redirect never
+  # carries the vault key.
   # It installs the CLI with npm, so it needs the network.
   opencode2-e2e:
     strategy:
