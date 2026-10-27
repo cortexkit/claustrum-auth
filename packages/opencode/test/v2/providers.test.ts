@@ -77,7 +77,7 @@ test('xai and opencode-zen get no login method on OpenCode 2 even when the host 
       (host.hooks.get('http.request') ?? []).map((hook) => hook.providerID),
     ).not.toContain(id)
   }
-  // The two that batch adds on OpenCode 2 are registered.
+  // Meta and OpenCode Go do register login methods on OpenCode 2.
   for (const id of ['meta', 'opencode-go'])
     expect(host.methods.has(`${id}:${vaultMethodId}`)).toBe(true)
 })
