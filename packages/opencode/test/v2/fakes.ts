@@ -4,7 +4,6 @@
 // event stream that stays open until disposal.
 import { afterEach } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
