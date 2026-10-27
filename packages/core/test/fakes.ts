@@ -5,7 +5,13 @@ import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
-import { createTestCore, fixtureEntries, type Host } from '../test-entry.ts'
+import {
+  createTestCore,
+  fixtureEntries,
+  type Host,
+  type ProviderEntry,
+  supportedProviders,
+} from '../test-entry.ts'
 
 const cleanup: (() => Promise<unknown>)[] = []
 afterEach(async () => {
@@ -33,6 +39,29 @@ export function row(
 }
 
 export async function harness(rows = [row('a')], host: Host = 'opencode1') {
+  return withTable(rows, host, fixtureEntries, 'fixture-a')
+}
+
+// The same harness over the shipped table: the hub's members and the vault
+// rows are the live providers a real host serves.
+export async function liveHarness(
+  rows: ScopedInventoryRow[],
+  host: Host = 'opencode1',
+) {
+  return withTable(
+    rows,
+    host,
+    supportedProviders,
+    supportedProviders[0]?.service as string,
+  )
+}
+
+async function withTable(
+  rows: ScopedInventoryRow[],
+  host: Host,
+  table: readonly ProviderEntry[],
+  firstMember: string,
+) {
   // common-auth writes these files owner-only and refuses a parent folder that
   // other users may change. A Windows CI checkout (D:\a\...) is such a folder,
   // so on Windows the scratch goes in the user's own temp folder instead.
@@ -82,27 +111,35 @@ export async function harness(rows = [row('a')], host: Host = 'opencode1') {
       closed++
     },
   }
-  const catalog = fixtureEntries.map((entry) => entry.hosts[host] as string)
-  const core = createTestCore({
-    stateDir: dir,
-    tokenPath,
-    connect: async () => client,
-    isCustodyActive: () => active,
-    facts: {
-      host,
-      catalog,
-      integrations: Object.fromEntries(catalog.map((id) => [id, id])),
-    },
+  const catalog = table.flatMap((entry) => {
+    const id = entry.hosts[host]
+    return id ? [id] : []
   })
+  const core = createTestCore(
+    {
+      stateDir: dir,
+      tokenPath,
+      connect: async () => client,
+      isCustodyActive: () => active,
+      facts: {
+        host,
+        catalog,
+        integrations: Object.fromEntries(catalog.map((id) => [id, id])),
+      },
+    },
+    table,
+  )
   cleanup.push(() => core.hub.dispose())
   await core.hub.refresh()
-  const consumer = core.consumers.get('fixture-a')
-  if (!consumer) throw new Error('missing fixture-a member')
+  const consumer = core.consumers.get(firstMember)
+  if (!consumer) throw new Error(`missing ${firstMember} member`)
   return {
     ...core,
     reads,
     reports,
     client,
+    // The material the fake vault serves for a row at its current version.
+    secretOf: (credentialId: string) => `secret-${credentialId}-${version}`,
     stats: () => ({ lists, closed }),
     setActive(value: boolean) {
       active = value

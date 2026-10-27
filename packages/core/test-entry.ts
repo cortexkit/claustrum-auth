@@ -1,7 +1,8 @@
 // Test fixtures belong here, outside the source tree bundled into host packages.
 export * from './src/index.ts'
 
-import type { ProviderEntry } from './src/providers.ts'
+import type { Host, HostFacts, ProviderEntry } from './src/providers.ts'
+import { supportedProviders } from './src/providers.ts'
 import type { CoreOptions } from './src/runtime.ts'
 import { createCoreWithTable } from './src/runtime.ts'
 
@@ -114,3 +115,46 @@ export const catalogEntries: readonly ProviderEntry[] = [
 export function createTestCore(options: CoreOptions, table = fixtureEntries) {
   return createCoreWithTable(options, table)
 }
+
+// A real host's catalog carries the live providers and the fixture providers
+// the harness adds. Tests that exercise the shipped table place rows against
+// this catalog instead of a hand-written list of ids.
+export function catalogFor(host: Host): string[] {
+  return [...supportedProviders, ...fixtureEntries].flatMap((entry) => {
+    const id = entry.hosts[host]
+    return id ? [id] : []
+  })
+}
+
+// Facts as a host that knows every live provider would report them: its own
+// catalog and, on OpenCode 2, one integration per provider id.
+export function publishedFacts(
+  host: Host,
+  catalog: readonly string[] = supportedProviders.flatMap((entry) => {
+    const id = entry.hosts[host]
+    return id ? [id] : []
+  }),
+): HostFacts {
+  return {
+    host,
+    catalog,
+    ...(host === 'opencode2'
+      ? { integrations: Object.fromEntries(catalog.map((id) => [id, id])) }
+      : {}),
+  }
+}
+
+export function liveFacts(host: Host): HostFacts {
+  const catalog = catalogFor(host)
+  return {
+    host,
+    catalog,
+    ...(host === 'opencode2'
+      ? { integrations: Object.fromEntries(catalog.map((id) => [id, id])) }
+      : {}),
+  }
+}
+
+export const tableByService = new Map(
+  supportedProviders.map((entry) => [entry.service, entry]),
+)

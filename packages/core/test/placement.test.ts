@@ -128,7 +128,26 @@ test('origin guard refuses scheme host port and credentials before vault reads o
         fixtureEntries[0],
       ),
     ).toThrow('origin-refused')
-  expect(supportedProviders.flatMap((entry) => entry.origins)).toEqual([])
+  // The shipped table names only the providers' own https origins: a loopback
+  // mock, a fixture service or a `wss` handshake never reaches the published
+  // build, which is what keeps the test harness out of it.
+  for (const entry of supportedProviders) {
+    expect(entry.service).not.toMatch(/^fixture-/u)
+    expect(entry.origins.length).toBeGreaterThan(0)
+    for (const origin of entry.origins) {
+      const url = new URL(origin)
+      expect(url.protocol).toBe('https:')
+      expect(url.pathname).toBe('/')
+      expect(url.hostname).not.toMatch(
+        /^(?:localhost|127\.\d+\.\d+\.\d+|\[::1\])$/u,
+      )
+    }
+  }
+  expect(fixtureEntries.map((entry) => entry.service)).toEqual([
+    'fixture-a',
+    'fixture-b',
+    'fixture-c',
+  ])
 })
 
 test('class C and D requests get zero vault reads even with a bearer placeholder', async () => {

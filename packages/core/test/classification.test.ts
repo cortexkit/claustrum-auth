@@ -184,7 +184,16 @@ test('reserved matrix never admits reserved providers alone or beside others', (
   ])
     for (const id of [...entry.ids, ...Object.values(entry.hosts)])
       expect(reservedProviders as readonly string[]).not.toContain(id)
-  expect(supportedProviders).toEqual([])
+  expect(supportedProviders.map((entry) => entry.service)).toEqual([
+    'cerebras',
+    'cline-pass',
+    'deepseek',
+    'fireworks',
+    'inception',
+    'kimi-coding',
+    'openrouter',
+    'typesafe',
+  ])
 })
 
 test('library gates category read and credential type and normalizes invalid classifications', async () => {
