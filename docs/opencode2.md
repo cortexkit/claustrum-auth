@@ -6,8 +6,9 @@ once under the `plugin` key in `opencode.json` serves both hosts.
 
 ## What it does at start
 
-For every provider in its supported table (none are live yet; each provider
-is listed only after its own proof on each host), the plugin registers:
+For every provider in its supported table (`docs/providers.md` lists the live
+ones and where each id and origin comes from; a provider is listed only after
+its own proof on each host), the plugin registers:
 
 - a login method, **Claustrum vault (claustrum-auth plugin)**, under the
   provider's own integration;

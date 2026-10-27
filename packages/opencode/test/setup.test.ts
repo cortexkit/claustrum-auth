@@ -52,12 +52,17 @@ test('published setup dry run names both enrollments, exact grants and native ac
       `ck auth grant --principal enrolled:claustrum-auth-${host} --selector-kind category --selector llm-provider --operation read`,
     )
   }
+  // The shipped table names real providers, so the dry run prints one
+  // activation line per host id, the OpenCode one for the first live provider.
+  expect(text).toContain('opencode auth login cerebras --method claustrum-auth')
   expect(text).toContain(
-    'opencode auth login <provider> --method claustrum-auth',
+    'opencode auth login fireworks-ai --method claustrum-auth',
   )
-  expect(text).toContain('/claustrum use <provider>')
+  expect(text).toContain('/claustrum use cerebras')
+  expect(text).toContain('/claustrum use fireworks')
   expect(text).toContain('Pi asks consent')
-  expect(text).toContain('no provider is available yet')
+  expect(text).not.toContain('no provider is available yet')
+  expect(text).not.toMatch(/fixture-/u)
   expect(text).toContain(resolveOpencodeStateDir(h.env, root))
   expect(text).toContain(path.join(h.env.PI_CODING_AGENT_DIR, 'claustrum-auth'))
   expect(text).not.toMatch(/fixture-|vault-auth|\/vault\b|~/u)
@@ -239,7 +244,8 @@ test('no-flag setup dry run defaults to vault enrollment, grants and activation 
   expect(h.output()).toContain(
     'ck auth grant --principal enrolled:claustrum-auth-pi',
   )
-  expect(h.output()).toContain('/claustrum use <provider>')
+  expect(h.output()).toContain('/claustrum use cerebras')
+  expect(h.output()).not.toContain('/claustrum use <provider>')
   expect(h.output()).not.toMatch(
     /sign in locally|beforeSignIn\([^\n]*local\)|\(local\)/u,
   )
@@ -321,10 +327,14 @@ test.each(['detected', 'explicit'] as const)(
       ['--dry-run', ...(generation === 'explicit' ? ['--opencode=2'] : [])],
       h.io,
     )
+    // The published dry run names the first live provider of the shipped table
+    // and the placeholder form for the rest.
     expect(h.output()).toContain(
+      'opencode auth login cerebras --method claustrum-auth',
+    )
+    expect(h.output()).not.toContain(
       'opencode auth login <provider> --method claustrum-auth',
     )
-    expect(h.output()).toContain('opencode2: no provider is available yet.')
     expect(h.output()).not.toContain('In OpenCode 1, type next:')
   },
 )

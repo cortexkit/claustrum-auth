@@ -1,7 +1,8 @@
 # OpenCode 1
 
 The claustrum-auth plugin serves vault keys on OpenCode 1 through each served
-provider's `options.fetch`, which its config hook installs at start. It owns a
+provider's `options.fetch`, which its config hook installs at start. The served
+providers and their ids on this host are in `docs/providers.md`. It owns a
 request only when the request carries the provider's placeholder,
 `cortexkit-claustrum-auth:v1:<provider>`, as `Authorization: Bearer`. Every
 other request goes on unchanged, including any request that carries your own
