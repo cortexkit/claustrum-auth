@@ -606,15 +606,27 @@ describe.skipIf(!enabled)(`OpenCode 1 real host (${process.platform})`, () => {
       await p.setAuth({ [A]: placeholderA })
       const h = await host(p)
       expect((await h.turn(A)).error).toBeUndefined()
-      const lists = (await p.vaultLog()).filter((e) => e.op === 'list').length
       await p.vault({ rows: [] })
-      const deadline = Date.now() + 30_000
-      while (
-        (await p.vaultLog()).filter((e) => e.op === 'list').length <= lists &&
-        Date.now() < deadline
-      )
-        await Bun.sleep(250)
-      await Bun.sleep(500)
+      // Wait for the plugin to apply the emptied roster, not just to start
+      // listing it: the roster file commit can land well after the new list
+      // on a slow runner, and a turn in between still routes on the old row.
+      // Each `accounts` read refreshes the hub first and only resolves once
+      // the new roster is committed and installed, so polling it waits for
+      // the applied state the turn needs. A turn sent too early would still
+      // refuse locally (the hub fails the stale route before any provider
+      // dispatch), but with the consumer's "disabled, removed or changed"
+      // text instead of "no vault account".
+      const session = await h.session()
+      const appliedBy = Date.now() + 120_000
+      for (;;) {
+        const accounts = await h.command(session, 'accounts')
+        if (accounts.includes(`${A}: 0 vault account(s)`)) break
+        if (Date.now() > appliedBy)
+          throw new Error(
+            `the emptied roster was not applied in time:\n${accounts}`,
+          )
+        await Bun.sleep(500)
+      }
       mock.requests.length = 0
       const result = await h.turn(A)
       expect(result.error).toContain('no vault account')
