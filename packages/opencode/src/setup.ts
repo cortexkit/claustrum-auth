@@ -26,6 +26,7 @@ import {
   type SetupHost,
   type SetupIO,
   type SetupPlugin,
+  setupUsage as sharedSetupUsage,
 } from '@cortexkit/common-auth/setup'
 import piPackage from '../../pi/package.json'
 import opencodePackage from '../package.json'
@@ -39,21 +40,32 @@ export interface ClaustrumSetupOptions {
 
 export const vaultOnlyMessage = 'This plugin serves vault keys only.'
 
+export const setupCommand = `npx ${opencodePackage.name} setup`
+
+/** Flags the shared parser accepts that this vault-only plugin refuses. */
+const refusedFlags = ['--no-claustrum', '--login']
+
+/**
+ * Help text: the shared flag list, minus the local sign-in flags this plugin
+ * refuses, followed by the lines that only apply to vault-only setup.
+ */
 export const setupUsage = [
-  'Usage: claustrum-auth [options]',
-  'Set up the vault-only claustrum-auth plugin for OpenCode and Pi.',
-  '  --dry-run                 Preview enrollment and registration without changes',
-  '  --yes                     Set up detected hosts without prompting',
-  '  --host <opencode|pi>       Select one host (also accepts --host=<host>)',
-  '  --opencode=1|2|both        Choose the OpenCode generation',
-  '  --enroll-only             Enroll without changing host configuration',
-  '  --claustrum               Compatibility flag; vault mode is always enabled',
-  '  --help                    Print this usage text without running setup',
+  ...sharedSetupUsage({ command: setupCommand })
+    .split('\n')
+    .filter(
+      (line) =>
+        !refusedFlags.some((flag) => line.trimStart().startsWith(`${flag} `)),
+    ),
+  '',
+  'Sets up the vault-only claustrum-auth plugin for OpenCode and Pi.',
+  'Vault mode is always on: --claustrum changes nothing, and setup never',
+  'signs in locally.',
+  '--help prints this text without running setup.',
 ].join('\n')
 
 /** Setup guides activation; only a host may change its own credentials. */
 export async function runClaustrumSetup(
-  argv: string[] = [],
+  rawArgv: string[] = [],
   io: SetupIO = {},
   options: ClaustrumSetupOptions = { table: supportedProviders, createCore },
 ) {
@@ -61,24 +73,18 @@ export async function runClaustrumSetup(
   const home = io.home ?? homedir()
   const terminal = io.terminal ?? processTerminal()
   const print = (text: string) => printLine(terminal, text)
+  // `setup` is the documented subcommand; the bare flag form keeps working.
+  const argv = rawArgv[0] === 'setup' ? rawArgv.slice(1) : rawArgv
   if (argv.includes('--help')) {
     print(setupUsage)
     return
   }
-  if (argv.includes('--no-claustrum') || argv.includes('--login'))
+  if (argv.some((arg) => refusedFlags.includes(arg)))
     throw new Error(vaultOnlyMessage)
-  const setupArgv = ['--claustrum']
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index] as string
-    if (arg === '--claustrum') continue
-    if (
-      arg === '--host' &&
-      argv[index + 1] &&
-      !argv[index + 1]?.startsWith('--')
-    ) {
-      setupArgv.push(`--host=${argv[++index]}`)
-    } else setupArgv.push(arg)
-  }
+  const setupArgv = [
+    '--claustrum',
+    ...argv.filter((arg) => arg !== '--claustrum'),
+  ]
   const states = {
     opencode: resolveOpencodeStateDir(env, home),
     pi: '',
@@ -106,8 +112,6 @@ export async function runClaustrumSetup(
     signInLocal: async () => {
       throw new Error(vaultOnlyMessage)
     },
-    // The current shared setup requires this callback; vault keys need no migration.
-    migrate: async () => {},
     beforeRegister: async (host, mode, context) => {
       if (mode !== 'claustrum') throw new Error(vaultOnlyMessage)
       await guidance(host, context.opencodeGeneration, true)

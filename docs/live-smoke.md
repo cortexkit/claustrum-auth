@@ -16,7 +16,7 @@ the turn's output and the `/claustrum` status line.
 2. Run setup and approve the enrollment, then grant the category:
 
    ```sh
-   claustrum-auth setup --claustrum
+   npx @cortexkit/opencode-claustrum-auth setup --claustrum
    # approve with the `ck auth enroll approve` command setup prints
    ck auth grant --principal enrolled:claustrum-auth-opencode \
      --selector-kind category --selector llm-provider --operation read

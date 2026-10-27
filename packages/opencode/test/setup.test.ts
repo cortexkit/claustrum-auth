@@ -66,6 +66,8 @@ test('published setup dry run names both enrollments, exact grants and native ac
   expect(text).toContain(resolveOpencodeStateDir(h.env, root))
   expect(text).toContain(path.join(h.env.PI_CODING_AGENT_DIR, 'claustrum-auth'))
   expect(text).not.toMatch(/fixture-|vault-auth|\/vault\b|~/u)
+  // Vault keys need no migration, so the plugin gives setup no migrate step.
+  expect(text).not.toContain('Would migrate')
   expect(h.proposals).toEqual([])
   expect(existsSync(path.join(root, 'state'))).toBe(false)
   expect(existsSync(path.join(root, 'config'))).toBe(false)
@@ -266,15 +268,36 @@ test('explicit --no-claustrum is refused with the fixed vault-only message befor
   expect(h.commands).toEqual([])
 })
 
-test('separated --host pi limits vault-only setup to Pi without a host prompt', async () => {
+test.each([
+  ['separated', ['--host', 'pi']],
+  ['equals', ['--host=pi']],
+] as const)(
+  '%s --host pi limits vault-only setup to Pi without a host prompt',
+  async (_form, host) => {
+    const root = await profile()
+    const h = setupIO(root)
+    const result = await runClaustrumSetup(['--dry-run', ...host], h.io)
+    expect(result?.hosts).toEqual(['pi'])
+    expect(h.output()).toContain('Enrollment: claustrum-auth-pi')
+    expect(h.output()).not.toContain('Enrollment: claustrum-auth-opencode')
+    expect(h.output()).not.toContain('Would Connect opencode')
+    expect(h.output()).toContain('Would Connect pi')
+    expect(h.proposals).toEqual([])
+  },
+)
+
+test('a leading setup argument reaches the same plan as the bare flag form', async () => {
   const root = await profile()
-  const h = setupIO(root)
-  const result = await runClaustrumSetup(['--dry-run', '--host', 'pi'], h.io)
-  expect(result?.hosts).toEqual(['pi'])
-  expect(h.output()).toContain('Enrollment: claustrum-auth-pi')
-  expect(h.output()).not.toContain('Enrollment: claustrum-auth-opencode')
-  expect(h.output()).not.toContain('Would Connect opencode')
-  expect(h.proposals).toEqual([])
+  const bare = setupIO(root)
+  const bareResult = await runClaustrumSetup(['--dry-run'], bare.io)
+  const sub = setupIO(root)
+  const subResult = await runClaustrumSetup(['setup', '--dry-run'], sub.io)
+  expect(subResult?.dryRun).toBe(true)
+  expect(subResult?.hosts).toEqual(bareResult?.hosts ?? [])
+  expect(sub.output()).toContain('Enrollment: claustrum-auth-opencode')
+  expect(sub.output()).toBe(bare.output())
+  expect(sub.proposals).toEqual([])
+  expect(existsSync(path.join(root, 'state'))).toBe(false)
 })
 
 test('built setup bin --help prints supported flags and exits successfully without setup', async () => {
@@ -293,17 +316,31 @@ test('built setup bin --help prints supported flags and exits successfully witho
     encoding: 'utf8',
   })
   expect(help.status).toBe(0)
-  expect(help.stdout).toContain('Usage:')
+  expect(help.stdout).toContain(
+    'Usage: npx @cortexkit/opencode-claustrum-auth setup [flags]',
+  )
+  // The shared flag list, including its space form for --host.
   for (const flag of [
     '--dry-run',
     '--yes',
-    '--host',
-    '--opencode',
+    '--host opencode|pi',
+    '--opencode=1|2|both',
     '--enroll-only',
     '--claustrum',
     '--help',
   ])
     expect(help.stdout).toContain(flag)
+  expect(help.stdout).toContain('Flags:')
+  // Vault is the only mode, so the local sign-in flags are not advertised.
+  expect(help.stdout).not.toContain('--no-claustrum')
+  expect(help.stdout).not.toContain('--login')
+  const subcommand = spawnSync(node as string, [bin, 'setup', '--help'], {
+    env: h.env,
+    cwd: root,
+    encoding: 'utf8',
+  })
+  expect(subcommand.status).toBe(0)
+  expect(subcommand.stdout).toBe(help.stdout)
   expect(help.stdout).not.toContain('Checking that OpenCode')
   expect(help.stderr).toBe('')
   expect(existsSync(path.join(root, 'state'))).toBe(false)

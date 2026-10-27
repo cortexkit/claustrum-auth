@@ -14,7 +14,7 @@ form until a provider has passed its host's support checks.
 Once published, preview the setup plan without changing the profile:
 
 ```sh
-bunx @cortexkit/opencode-claustrum-auth --dry-run --opencode=both
+npx @cortexkit/opencode-claustrum-auth setup --dry-run --opencode=both
 ```
 
 Quit OpenCode and Pi, then run the same command with `--yes` instead of
