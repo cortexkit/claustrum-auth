@@ -82,57 +82,65 @@ test('xai and opencode-zen get no login method on OpenCode 2 even when the host 
     expect(host.methods.has(`${id}:${vaultMethodId}`)).toBe(true)
 })
 
-test('a live provider is served with its vault key, and a lookalike origin is refused before the read', async () => {
-  for (const entry of supportedProviders) {
-    const provider = entry.hosts.opencode2
-    if (!provider) continue
-    const origin = new URL(entry.origins[0] as string)
-    // The operator's row: the fleet id (cline-pass: its exact credential id
-    // and no provider id), which the plugin maps to OpenCode's id.
-    const vaultRow = vaultRowFor(entry, {
-      accountId: `account-${entry.service}`,
-    })
-    const credential = vaultRow.id
-    const { host, vault } = await startServer({
-      rows: [vaultRow],
-      catalog: opencode2Catalog(supportedProviders),
-      table: supportedProviders,
-    })
-    expect(await login(host, provider)).toMatchObject({
-      type: 'oauth',
-      access: placeholderSecret(provider),
-    })
-    const request = new Request(new URL('/v1/chat/completions', origin), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...bearer(provider) },
-      body: '{}',
-    })
-    const sent = await send(host, provider, request)
-    expect([provider, sent.request.headers.get('authorization')]).toEqual([
-      provider,
-      `Bearer secret-${credential}-1`,
-    ])
-    expect(vault.reads).toEqual([credential])
-    for (const lookalike of [
-      `${origin.protocol}//${origin.hostname}.example`,
-      `${origin.protocol}//${origin.hostname}:8443`,
-      `http://${origin.hostname}`,
-    ]) {
-      await expect(
-        send(
-          host,
-          provider,
-          new Request(new URL('/v1/chat/completions', lookalike), {
-            method: 'POST',
-            headers: bearer(provider),
-            body: '{}',
-          }),
-        ),
-      ).rejects.toThrow('is only sent to')
+// One test per provider: each starts a server that writes owner-only files,
+// and a single loop over every provider ran past Bun's 5 s default on
+// Windows. A failure now also names the provider that broke.
+test.each(
+  supportedProviders
+    .filter((entry) => entry.hosts.opencode2)
+    .map((entry) => [entry.hosts.opencode2 as string, entry] as const),
+)(
+  '%s is served with its vault key, and a lookalike origin is refused before the read',
+  async (provider, entry) => {
+    {
+      const origin = new URL(entry.origins[0] as string)
+      // The operator's row: the fleet id (cline-pass: its exact credential id
+      // and no provider id), which the plugin maps to OpenCode's id.
+      const vaultRow = vaultRowFor(entry, {
+        accountId: `account-${entry.service}`,
+      })
+      const credential = vaultRow.id
+      const { host, vault } = await startServer({
+        rows: [vaultRow],
+        catalog: opencode2Catalog(supportedProviders),
+        table: supportedProviders,
+      })
+      expect(await login(host, provider)).toMatchObject({
+        type: 'oauth',
+        access: placeholderSecret(provider),
+      })
+      const request = new Request(new URL('/v1/chat/completions', origin), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...bearer(provider) },
+        body: '{}',
+      })
+      const sent = await send(host, provider, request)
+      expect([provider, sent.request.headers.get('authorization')]).toEqual([
+        provider,
+        `Bearer secret-${credential}-1`,
+      ])
+      expect(vault.reads).toEqual([credential])
+      for (const lookalike of [
+        `${origin.protocol}//${origin.hostname}.example`,
+        `${origin.protocol}//${origin.hostname}:8443`,
+        `http://${origin.hostname}`,
+      ]) {
+        await expect(
+          send(
+            host,
+            provider,
+            new Request(new URL('/v1/chat/completions', lookalike), {
+              method: 'POST',
+              headers: bearer(provider),
+              body: '{}',
+            }),
+          ),
+        ).rejects.toThrow('is only sent to')
+      }
+      expect(vault.reads).toEqual([credential])
     }
-    expect(vault.reads).toEqual([credential])
-  }
-})
+  },
+)
 
 test('a provider the host catalog does not hold gets no login method account', async () => {
   const { host } = await startServer({

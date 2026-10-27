@@ -7,67 +7,75 @@ import { supportedProviders } from '../../core/test-entry.ts'
 import { providerFetch } from '../src/v1/fetch.ts'
 import { placeholderFor } from '../src/v1/placeholder.ts'
 
-test('a live provider is served with its vault key to its origin, and a lookalike origin is refused', async () => {
-  for (const entry of supportedProviders) {
-    const provider = entry.hosts.opencode1
-    if (!provider) continue
-    const origin = new URL(entry.origins[0] as string)
-    // The operator's row carries the fleet id (cline-pass: its exact
-    // credential id and no provider id); OpenCode 1 serves it under its own.
-    const vaultRow = vaultRowFor(entry)
-    const credential = vaultRow.id
-    const h = await liveHarness([vaultRow], 'opencode1')
-    const consumer = h.consumers.get(provider)
-    if (!consumer) throw new Error(`no ${provider} member on OpenCode 1`)
-    const calls: { auth: string | null; url: string }[] = []
-    const fetch = providerFetch({
-      provider,
-      entry,
-      consumer,
-      previous: async () => new Response('foreign'),
-      transport: async (input) => {
-        const request = input as Request
-        calls.push({
-          auth: request.headers.get('authorization'),
-          url: request.url,
-        })
-        return new Response('ok')
-      },
-      envNames: async () => [],
-      env: () => ({}),
-      platform: 'linux',
-    })
-    const placeholder = placeholderFor(provider)
-    const url = new URL('/v1/chat/completions', origin).href
-    expect(
-      await (
-        await fetch(url, {
-          headers: { authorization: `Bearer ${placeholder}` },
-        })
-      ).text(),
-    ).toBe('ok')
-    expect(calls.at(-1)).toEqual({
-      auth: `Bearer secret-${credential}-1`,
-      url,
-    })
-    for (const lookalike of [
-      `${origin.protocol}//${origin.hostname}.example`,
-      `${origin.protocol}//${origin.hostname}:8443`,
-      `http://${origin.hostname}`,
-    ]) {
-      await expect(
-        fetch(new URL('/v1/chat/completions', lookalike).href, {
-          headers: { authorization: `Bearer ${placeholder}` },
-        }),
-      ).rejects.toMatchObject({
-        name: 'ClaustrumRefusal',
-        code: 'origin-refused',
+// One test per provider: each builds a live harness that writes owner-only
+// files, and a single loop over every provider ran past Bun's 5 s default on
+// Windows. A failure now also names the provider that broke.
+test.each(
+  supportedProviders
+    .filter((entry) => entry.hosts.opencode1)
+    .map((entry) => [entry.hosts.opencode1 as string, entry] as const),
+)(
+  '%s is served with its vault key to its origin, and a lookalike origin is refused',
+  async (provider, entry) => {
+    {
+      const origin = new URL(entry.origins[0] as string)
+      // The operator's row carries the fleet id (cline-pass: its exact
+      // credential id and no provider id); OpenCode 1 serves it under its own.
+      const vaultRow = vaultRowFor(entry)
+      const credential = vaultRow.id
+      const h = await liveHarness([vaultRow], 'opencode1')
+      const consumer = h.consumers.get(provider)
+      if (!consumer) throw new Error(`no ${provider} member on OpenCode 1`)
+      const calls: { auth: string | null; url: string }[] = []
+      const fetch = providerFetch({
+        provider,
+        entry,
+        consumer,
+        previous: async () => new Response('foreign'),
+        transport: async (input) => {
+          const request = input as Request
+          calls.push({
+            auth: request.headers.get('authorization'),
+            url: request.url,
+          })
+          return new Response('ok')
+        },
+        envNames: async () => [],
+        env: () => ({}),
+        platform: 'linux',
       })
+      const placeholder = placeholderFor(provider)
+      const url = new URL('/v1/chat/completions', origin).href
+      expect(
+        await (
+          await fetch(url, {
+            headers: { authorization: `Bearer ${placeholder}` },
+          })
+        ).text(),
+      ).toBe('ok')
+      expect(calls.at(-1)).toEqual({
+        auth: `Bearer secret-${credential}-1`,
+        url,
+      })
+      for (const lookalike of [
+        `${origin.protocol}//${origin.hostname}.example`,
+        `${origin.protocol}//${origin.hostname}:8443`,
+        `http://${origin.hostname}`,
+      ]) {
+        await expect(
+          fetch(new URL('/v1/chat/completions', lookalike).href, {
+            headers: { authorization: `Bearer ${placeholder}` },
+          }),
+        ).rejects.toMatchObject({
+          name: 'ClaustrumRefusal',
+          code: 'origin-refused',
+        })
+      }
+      // A refusal reads nothing: one row, one read for the served request.
+      expect([provider, h.reads]).toEqual([provider, [credential]])
     }
-    // A refusal reads nothing: one row, one read for the served request.
-    expect([provider, h.reads]).toEqual([provider, [credential]])
-  }
-})
+  },
+)
 
 test('every live provider OpenCode 1 lists has a member, and no fixture provider has one', async () => {
   const rows = supportedProviders.flatMap((entry) =>
