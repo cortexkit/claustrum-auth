@@ -10,6 +10,7 @@ import {
   type ClaustrumConsumer,
   type ClaustrumDiscoveryHub,
   type ClaustrumScopedClient,
+  classifyVaultFailure,
   connectClaustrumScopedClient,
   enrollmentAuthority,
   hostEnrollmentPaths,
@@ -159,6 +160,19 @@ export function opencode1Hosts(
     platform: options.platform,
   }
 
+  // One discovery on demand, for an owned request that found no account.
+  const discover = async () => {
+    if (!(await isCustodyActive())) return 'off' as const
+    try {
+      await core.hub.refresh()
+      return 'listed' as const
+    } catch (error) {
+      return classifyVaultFailure(error) === 'unreachable'
+        ? ('unreachable' as const)
+        : ('listed' as const)
+    }
+  }
+
   async function show(sessionID: string, text: string) {
     await input.client.session
       .promptAsync({
@@ -209,6 +223,7 @@ export function opencode1Hosts(
           envNames: () => envNames(provider),
           env: () => hostEnvironment(env() as NodeJS.ProcessEnv),
           platform: options.platform,
+          discover,
         })
       }
     },

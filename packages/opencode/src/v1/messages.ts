@@ -54,6 +54,8 @@ export function refusalMessage(code: string, provider: string): string {
       return `claustrum-auth: the vault key for ${provider} is only sent to the provider's own origins; this request goes elsewhere (check provider.${provider}.options.baseURL).`
     case 'no-vault-account':
       return `claustrum-auth: no vault account for ${provider}.`
+    case 'vault-unreachable':
+      return `claustrum-auth: the vault could not be reached and no earlier key for ${provider} is kept in this OpenCode.`
     case 'vault-mode-off':
       return `claustrum-auth: vault mode is off for the claustrum-auth plugin; run its setup with --claustrum, or ${command} release ${provider}.`
     case 'account-missing':

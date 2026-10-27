@@ -125,6 +125,54 @@ test('placement and origin refusals carry fixed text and read nothing', async ()
   expect(h.reads).toEqual([])
 })
 
+test('an owned request with no account asks for a discovery and names an outage or vault mode off', async () => {
+  const h = await harness([])
+  const sent: string[] = []
+  for (const [state, code] of [
+    ['unreachable', 'vault-unreachable'],
+    ['off', 'vault-mode-off'],
+    ['listed', 'no-vault-account'],
+  ] as const) {
+    let asked = 0
+    const fetch = providerFetch({
+      provider: P,
+      entry: entryA,
+      consumer: h.consumer,
+      transport: async (input) => {
+        sent.push(String(input))
+        return new Response('ok')
+      },
+      envNames: async () => [],
+      env: () => ({}),
+      discover: async () => {
+        asked++
+        return state
+      },
+    })
+    const error = await fetch(url, { headers: bearer }).catch((e) => e)
+    expect(error).toMatchObject({ name: 'ClaustrumRefusal', code })
+    expect(asked).toBe(1)
+  }
+  // A refusal before ownership is decided never asks.
+  let asked = 0
+  const misplaced = providerFetch({
+    provider: P,
+    entry: entryA,
+    consumer: h.consumer,
+    envNames: async () => [],
+    discover: async () => {
+      asked++
+      return 'unreachable'
+    },
+  })
+  await expect(
+    misplaced('https://elsewhere.invalid', { headers: bearer }),
+  ).rejects.toMatchObject({ code: 'origin-refused' })
+  expect(asked).toBe(0)
+  expect(sent).toEqual([])
+  expect(h.reads).toEqual([])
+})
+
 type LooseConfig = {
   command: Record<string, unknown>
   provider: Record<

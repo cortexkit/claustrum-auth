@@ -35,6 +35,11 @@ export interface ProviderFetchOptions {
   env?: () => Readonly<Record<string, string | undefined>>
   rateLimitMarks?: Map<string, number>
   platform?: NodeJS.Platform
+  // Asked when an owned request finds no vault account: is vault mode off,
+  // does a discovery fail because the vault is unreachable, or did one just
+  // succeed? A process that has never listed (a vault down since start) then
+  // reports the outage instead of an empty roster.
+  discover?: () => Promise<'off' | 'unreachable' | 'listed'>
 }
 
 // The `provider.<P>.options.fetch` the config hook installs. Classification,
@@ -46,7 +51,10 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
     options.previous ?? ((input, init) => globalThis.fetch(input, init))
   const transport: CoreFetch =
     options.transport ?? ((input, init) => globalThis.fetch(input, init))
-  return async (input, init) => {
+  const attempt = async (
+    input: Parameters<CoreFetch>[0],
+    init?: RequestInit,
+  ) => {
     let shadowed: string | undefined
     const core = createFetch({
       entry: options.entry,
@@ -83,7 +91,51 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
             : refusalMessage(code, options.provider),
         )
       }
+      const kind = vaultFailure(error)
+      if (kind)
+        throw new ClaustrumRefusal(kind, refusalMessage(kind, options.provider))
       throw error
     }
   }
+  return async (input, init) => {
+    try {
+      return await attempt(input, init)
+    } catch (error) {
+      if (
+        !(error instanceof ClaustrumRefusal) ||
+        error.code !== 'no-vault-account' ||
+        !options.discover
+      )
+        throw error
+      // The core refuses before buffering or reading anything, so a request
+      // whose body is a string or absent can be tried once more.
+      const replayable =
+        !(input instanceof Request) &&
+        (init?.body === undefined ||
+          init.body === null ||
+          typeof init.body === 'string')
+      const state = await options.discover()
+      if (state === 'off' || state === 'unreachable')
+        throw new ClaustrumRefusal(
+          state === 'off' ? 'vault-mode-off' : 'vault-unreachable',
+          refusalMessage(
+            state === 'off' ? 'vault-mode-off' : 'vault-unreachable',
+            options.provider,
+          ),
+        )
+      if (replayable && options.consumer.routingRows().length)
+        return await attempt(input, init)
+      throw error
+    }
+  }
+}
+
+// The consumer's own refusals that mean the vault cannot serve this request.
+// Their library text is replaced by the plugin's fixed text for the user.
+function vaultFailure(error: unknown) {
+  if (!(error instanceof Error) || !('kind' in error)) return undefined
+  if (error.kind === 'unavailable') return 'vault-unreachable'
+  if (error.kind === 'not-active') return 'vault-mode-off'
+  if (error.kind === 'route-unavailable') return 'no-vault-account'
+  return undefined
 }
