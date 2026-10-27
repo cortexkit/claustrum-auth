@@ -25,6 +25,7 @@ import {
   type ProviderEntry,
 } from '../../../../core/test-entry.ts'
 import { setupServer } from '../../../src/v2/setup.ts'
+import { startupError } from './startup-error.ts'
 
 const env = (name: string) => process.env[name] ?? ''
 const VAULT = env('CLAUSTRUM_AUTH_E2E_VAULT')
@@ -40,6 +41,8 @@ function log(event: string, data: Record<string, unknown> = {}) {
       `${JSON.stringify({ seq: ++seq, at: Date.now(), event, ...data })}\n`,
     )
 }
+
+log('import', { platform: process.platform, versions: process.versions })
 
 const base = (id: string) => {
   const entry = fixtureEntries.find((candidate) => candidate.service === id)
@@ -125,14 +128,16 @@ function carries(headers: Headers, value: string) {
   return [...headers].filter(([, v]) => v.includes(value)).map(([name]) => name)
 }
 
-export default {
+const plugin = {
   id: 'cortexkit.claustrum-auth.e2e',
   async setup(ctx: Plugin.Context) {
     const tokenPath = path.join(STATE, 'token.json')
+    log('enrollment-token-start', { tokenPath })
     await writeEnrollmentTokenFile(tokenPath, {
       token: '01'.repeat(32),
       token_generation: 1,
     })
+    log('enrollment-token-ready')
     const abort = new AbortController()
     const ids = table.map((entry) => entry.hosts.opencode2 as string)
     // Registered before the installer, so they see each transport as the
@@ -252,6 +257,19 @@ export default {
       abort.abort()
       for (const observer of observers) await observer.dispose()
       await cleanup()
+    }
+  },
+}
+
+export default {
+  id: plugin.id,
+  async setup(ctx: Plugin.Context) {
+    log('setup-start', { state: STATE })
+    try {
+      return await plugin.setup(ctx)
+    } catch (error) {
+      log('setup-error', { error: startupError(error) })
+      throw error
     }
   },
 }

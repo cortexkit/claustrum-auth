@@ -20,8 +20,15 @@ import {
 import { mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
+import { buildPlugin } from './build-plugin.ts'
+import {
+  describeConfig,
+  describeHosts,
+  describePath,
+  describePlugin,
+} from './diagnostics.ts'
 import { type FakeVault, startFakeVault, type VaultRow } from './fake-vault.ts'
 import {
   executable,
@@ -91,8 +98,8 @@ class Scenario {
   readonly env: Record<string, string>
   readonly log: string
   readonly state: string
+  readonly configFile: string
   readonly hosts: HostProcess[] = []
-  readonly outputs: string[] = []
   server?: HostProcess
   serverURL = ''
 
@@ -117,21 +124,15 @@ class Scenario {
       CLAUSTRUM_AUTH_E2E_LOG: this.log,
       CLAUSTRUM_AUTH_E2E_ORIGIN: mock.url,
     })
-    // A file URL, not a native path: the documented plugin spec on every
-    // OS, and the only form a Windows checkout path (backslashes, drive
-    // letter) reaches the host's loader in. Without it the host never
-    // loads the plugin there, so no login method is registered and every
-    // login fails with "Authentication method not found: claustrum-auth".
+    // The host accepts local plugins as file URLs on every OS.
     const config = {
       plugins: [pathToFileURL(pluginDir).href],
       providers: providerConfig(mock),
     }
     const dir = path.join(this.env.XDG_CONFIG_HOME, 'opencode')
     mkdirSync(dir, { recursive: true })
-    writeFileSync(
-      path.join(dir, 'opencode.json'),
-      JSON.stringify(config, null, 2),
-    )
+    this.configFile = path.join(dir, 'opencode.json')
+    writeFileSync(this.configFile, JSON.stringify(config, null, 2))
   }
 
   static async create(rows: VaultRow[], options: { offline?: boolean } = {}) {
@@ -154,7 +155,7 @@ class Scenario {
         String(port),
         '--print-logs',
         '--log-level',
-        'info',
+        'debug',
       ]),
       { cwd: this.project, env: this.env },
     )
@@ -200,7 +201,6 @@ class Scenario {
     )
     if (!finished) await stopHost(host)
     const output = `${host.stdout.join('')}${host.stderr.join('')}`
-    this.outputs.push(output)
     return { exit: host.child.exitCode, output }
   }
 
@@ -293,17 +293,20 @@ class Scenario {
 
   describe() {
     return [
+      `host environment: ${JSON.stringify({
+        platform: process.platform,
+        bun: Bun.version,
+        cli: describePath(cli),
+        project: describePath(this.project),
+        state: describePath(this.state),
+        temp: describePath(this.env.TEMP),
+      })}`,
+      describeConfig(this.configFile),
+      describePlugin(pluginDir),
       `wire: ${JSON.stringify(this.mock.records.map(({ headers: _, ...rest }) => rest))}`,
       `vault: reads ${JSON.stringify(this.vault.reads)} reports ${JSON.stringify(this.vault.reports)} lists ${this.vault.lists}`,
       `plugin: ${existsSync(this.log) ? readFileSync(this.log, 'utf8') : ''}`,
-      ...this.outputs.map(
-        (output, index) => `--- command ${index + 1}\n${output.slice(-3000)}`,
-      ),
-      ...(this.server
-        ? [
-            `--- server\n${this.server.stdout.join('').slice(-4000)}\n${this.server.stderr.join('').slice(-4000)}`,
-          ]
-        : []),
+      describeHosts(this.hosts),
     ].join('\n')
   }
 
@@ -476,17 +479,7 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
         `expected @opencode/cli ${OPENCODE_CLI_VERSION}, found "${version}"`,
       )
     pluginDir = path.join(scratch, 'plugin')
-    const build = await Bun.build({
-      entrypoints: [
-        fileURLToPath(new URL('./plugin-entry.ts', import.meta.url)),
-      ],
-      outdir: pluginDir,
-      naming: 'index.js',
-      target: 'node',
-      format: 'esm',
-    })
-    if (!build.success)
-      throw new Error(`plugin bundle failed: ${build.logs.join('\n')}`)
+    await buildPlugin(pluginDir)
   }, 300_000)
 
   afterAll(async () => {
