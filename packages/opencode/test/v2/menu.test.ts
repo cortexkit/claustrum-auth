@@ -3,6 +3,17 @@ import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import { row, startServer } from './fakes.ts'
 
 test('OpenCode 2 claustrum command renders status, accounts and refusals and applies the requested vault order', async () => {
+  // Failure-only phase clock: this test once took 5.5 s on Windows CI against
+  // about 2 s before, so a repeat prints which step took the time.
+  const started = performance.now()
+  const phases: string[] = []
+  const mark = (label: string) =>
+    phases.push(`${label} +${Math.round(performance.now() - started)}ms`)
+  const timer = setTimeout(
+    () => console.error(`menu test phases: ${phases.join(', ')}`),
+    4_500,
+  )
+  timer.unref?.()
   const { host, vault } = await startServer({
     rows: [
       row('first'),
@@ -10,10 +21,12 @@ test('OpenCode 2 claustrum command renders status, accounts and refusals and app
       row('reserved', { providerIds: ['openai'] }),
     ],
   })
+  mark('server')
   const command = host.commands.get('claustrum')
   expect(command).toBeDefined()
   const run = async (text: string) => {
     await command?.execute({ sessionID: 'invoking-session', prompt: { text } })
+    mark(text.split(' ').slice(0, 2).join(' '))
     expect(host.synthetic.at(-1)).toMatchObject({
       sessionID: 'invoking-session',
       resume: false,
@@ -47,4 +60,5 @@ test('OpenCode 2 claustrum command renders status, accounts and refusals and app
     'no order was changed',
   )
   expect(vault.reads).toEqual([])
+  clearTimeout(timer)
 })
