@@ -58,7 +58,7 @@ type Shared = { core: Core; holders: number }
 // OpenCode 1 runs a plugin once per project instance, all in one process. The
 // hub is the process's only vault connection, so instances with the same
 // state share it through a process-wide registry.
-const registryKey = Symbol.for('@cortexkit/claustrum-auth/opencode1-hubs')
+const registryKey = Symbol.for('cortexkit.claustrum-auth.opencode1-hubs')
 const processState = globalThis as typeof globalThis & {
   [registryKey]?: Map<string, Shared>
 }

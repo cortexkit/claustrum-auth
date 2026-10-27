@@ -25,7 +25,7 @@
     }
   },
   "scripts": {
-    "build": "bun ../../scripts/build-package.ts opencode && tsc -p tsconfig.build.json",
+    "build": "bun ../../scripts/build-package.ts opencode && tsc -p tsconfig.build.json && bun -e \"require('node:fs').rmSync('dist/v1', { recursive: true, force: true })\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test"
   },
