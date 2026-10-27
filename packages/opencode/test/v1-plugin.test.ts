@@ -13,6 +13,7 @@ import type { AuthApi } from '../src/v1/activation.ts'
 import { providerFetch } from '../src/v1/fetch.ts'
 import { placeholderFor } from '../src/v1/placeholder.ts'
 import { commandName, opencode1Hosts } from '../src/v1/plugin.ts'
+import { scratchRoot } from './scratch-root.ts'
 
 const P = 'fixture-a'
 const bearer = { authorization: `Bearer ${placeholderFor(P)}` }
@@ -186,7 +187,7 @@ type LooseConfig = {
 }
 
 async function pluginHarness() {
-  const root = path.join(import.meta.dir, '..', '..', '..', 'target', 'scratch')
+  const root = scratchRoot()
   await mkdir(root, { recursive: true })
   const dir = await mkdtemp(path.join(root, 'opencode1-plugin-'))
   dirs.push(dir)

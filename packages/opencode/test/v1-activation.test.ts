@@ -13,6 +13,7 @@ import { effectiveCredential, hostEnvironment } from '../src/v1/effective.ts'
 import { ReleasedFlags } from '../src/v1/flags.ts'
 import { concurrentWriteWarning } from '../src/v1/messages.ts'
 import { isPlaceholderEntry, placeholderFor } from '../src/v1/placeholder.ts'
+import { scratchRoot } from './scratch-root.ts'
 
 const cleanup: string[] = []
 afterEach(async () => {
@@ -21,7 +22,7 @@ afterEach(async () => {
 })
 
 async function scratch() {
-  const root = path.join(import.meta.dir, '..', '..', '..', 'target', 'scratch')
+  const root = scratchRoot()
   await mkdir(root, { recursive: true })
   const dir = await mkdtemp(path.join(root, 'opencode1-'))
   cleanup.push(dir)

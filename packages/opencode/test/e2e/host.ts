@@ -25,6 +25,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { hostEnrollmentPaths } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { scratchRoot } from '../scratch-root.ts'
 import type { VaultControl } from './fixture-plugin.ts'
 
 export const enabled = process.env.CLAUSTRUM_AUTH_OPENCODE1_E2E === '1'
@@ -280,7 +281,7 @@ export async function profile(
   mock: Mock,
   control: Partial<VaultControl>,
 ): Promise<Profile> {
-  const scratch = path.join(repo, 'target', 'scratch')
+  const scratch = scratchRoot()
   await mkdir(scratch, { recursive: true })
   const root = await mkdtemp(path.join(scratch, `oc1-${name}-`))
   const dirs = {

@@ -15,6 +15,7 @@ import {
   type ProviderEntry,
 } from '../../../core/test-entry.ts'
 import { type ServerDeps, setupServer } from '../../src/v2/setup.ts'
+import { scratchRoot } from '../scratch-root.ts'
 
 const cleanup: (() => Promise<unknown>)[] = []
 afterEach(async () => {
@@ -200,14 +201,7 @@ export async function startServer(
     table?: readonly ProviderEntry[]
   } = {},
 ) {
-  // common-auth writes these files owner-only and refuses a parent folder
-  // that other users may change. A Windows CI checkout (D:\a\...) is such
-  // a folder, so on Windows the scratch goes in the user's own temp folder
-  // instead.
-  const scratch =
-    process.platform === 'win32'
-      ? path.join(os.tmpdir(), 'claustrum-auth-scratch')
-      : path.join(import.meta.dir, '..', '..', '..', '..', 'target', 'scratch')
+  const scratch = scratchRoot()
   await mkdir(scratch, { recursive: true })
   const dir = await mkdtemp(path.join(scratch, 'opencode2-'))
   cleanup.push(() => rm(dir, { recursive: true, force: true }))
