@@ -14,6 +14,7 @@ export type Refusal =
   | 'body-too-large'
   | 'redirect-limit'
   | 'no-vault-account'
+  | 'route-gone'
   | 'vault-mode-off'
   | 'consent-required'
 
@@ -139,5 +140,30 @@ export async function redactResponse(
 export function redactError(error: unknown, secrets: readonly string[]) {
   let result = redactCredentialError(error)
   for (const secret of secrets) result = redactCredentialError(result, secret)
+  // The redactor drops a consumer error's `kind`, the fixed enum that tells a
+  // withdrawn route from an unreachable vault, and hands back a plain Error.
+  // Restore it so a host can name the cause; it is the library's own enum and
+  // never carries request data.
+  const kind = ownKind(error)
+  if (kind !== undefined)
+    Object.defineProperty(result, 'kind', {
+      value: kind,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    })
   return result
+}
+
+// Read only a field the error holds itself: a getter could run anything, and
+// an inherited value belongs to some other object.
+function ownKind(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'kind')
+    return typeof descriptor?.value === 'string' ? descriptor.value : undefined
+  } catch {
+    // An exotic object, such as a Proxy, may refuse the lookup.
+    return undefined
+  }
 }

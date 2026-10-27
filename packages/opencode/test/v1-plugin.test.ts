@@ -2,12 +2,14 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import {
+  ClaustrumConsumerError,
   type ClaustrumScopedClient,
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
 import type { PluginInput } from '@opencode-ai/plugin'
 import { harness, row } from '../../core/test/fakes.ts'
+import type { ServingConsumer } from '../../core/test-entry.ts'
 import { createTestCore, fixtureEntries } from '../../core/test-entry.ts'
 import { opencodeStateDir } from '../src/state-dir.ts'
 import type { AuthApi } from '../src/v1/activation.ts'
@@ -27,7 +29,10 @@ afterEach(async () => {
     await rm(dir, { recursive: true, force: true })
 })
 
-async function served(env: Record<string, string> = {}) {
+async function served(
+  env: Record<string, string> = {},
+  consumer?: ServingConsumer,
+) {
   const h = await harness([row('a')])
   const calls: { via: string; auth: string | null; url: string }[] = []
   const record =
@@ -44,7 +49,7 @@ async function served(env: Record<string, string> = {}) {
   const fetch = providerFetch({
     provider: P,
     entry: entryA,
-    consumer: h.consumer,
+    consumer: consumer ?? h.consumer,
     previous: record('previous'),
     transport: record('transport'),
     envNames: async () => ['FIXTURE_A_API_KEY'],
@@ -108,6 +113,31 @@ test('a differently cased variable is not the host key, so the request is served
   await fetch(url, { headers: bearer })
   expect(calls[0]?.auth).toBe('Bearer secret-a-1')
   expect(h.reads).toEqual(['a'])
+})
+
+test("a route withdrawn between the roster read and the send gets the plugin's own text, and nothing is sent", async () => {
+  // The account still routes; the vault refuses it at authorize because it
+  // was withdrawn after the roster read (a disabled or changed route).
+  const withdrawn = new ClaustrumConsumerError(
+    'route-unavailable',
+    'Claustrum route is disabled, removed or changed',
+  )
+  const base = await harness([row('a')])
+  const { calls, fetch } = await served({}, {
+    ...base.consumer,
+    routingRows: () => [{ id: 'vault:gone', kind: 'api-key' }],
+    authorize: async () => {
+      throw withdrawn
+    },
+    send: base.consumer.send,
+    reportFailure: base.consumer.reportFailure,
+  } satisfies ServingConsumer)
+  const error = await fetch(url, { headers: bearer }).catch((e) => e)
+  expect(error).toMatchObject({ name: 'ClaustrumRefusal', code: 'route-gone' })
+  expect(error.message).toContain('no longer serves this account for fixture-a')
+  expect(error.message).toContain(`${'/claustrum'} use fixture-a`)
+  expect(error.message).not.toContain('Claustrum route is disabled')
+  expect(calls).toEqual([])
 })
 
 test('placement and origin refusals carry fixed text and read nothing', async () => {

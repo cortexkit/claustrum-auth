@@ -17,6 +17,8 @@ export function refusalText(
       return `${refused} the vault key for ${provider} is only sent to ${entry.origins.join(', ')}, and this request goes elsewhere (check a baseUrl override for this model). ${nothingSent}`
     case 'no-vault-account':
       return `${refused} the Claustrum vault has no usable account for ${provider}. Your own Pi login for ${provider} stays moved aside while the plugin owns it; add an account in the vault, or run ${command} release ${provider}. ${nothingSent}`
+    case 'route-gone':
+      return `${refused} the Claustrum vault no longer serves this account for ${provider}; it was disabled, removed or changed after the plugin read it. Your own Pi login for ${provider} stays moved aside while the plugin owns it; check the vault's accounts and run ${command} use ${provider} again to pick them up, or run ${command} release ${provider}. ${nothingSent}`
     case 'vault-mode-off':
       return `${refused} Pi is not connected to the Claustrum vault, but your Pi login for ${provider} is still moved aside. Reconnect Pi to the vault, or run ${command} release ${provider}. ${nothingSent}`
     case 'vault-unreachable':
