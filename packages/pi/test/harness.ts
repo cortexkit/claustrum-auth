@@ -3,8 +3,8 @@
 // its own PI_CODING_AGENT_DIR, HOME and USERPROFILE under target/scratch
 // (the user's own temp folder on Windows, where owner-only writes are
 // allowed), so a test never reads or writes the real ~/.pi.
-import { afterEach } from 'bun:test'
-import { type ChildProcess, spawn } from 'node:child_process'
+import { onTestFinished } from 'bun:test'
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import {
   type Dirent,
   existsSync,
@@ -24,6 +24,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { killTree } from '../../opencode/test/v2/e2e/host.ts'
+import { windowsProcesses } from '../../opencode/test/v2/e2e/windows-processes.ts'
 import { buildPiBundle } from '../build.ts'
 import type { PiTestConfig } from '../test-entry.ts'
 
@@ -39,10 +41,47 @@ const piCli = path.join(
 )
 
 const cleanup: (() => Promise<unknown> | unknown)[] = []
-// Stopping Pi and removing its folders can take several seconds on Windows.
-afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close()
-}, 60_000)
+// Every Pi this harness started whose process has not exited yet.
+const running = new Set<PiRpc>()
+let armed = false
+
+/**
+ * Runs `close` when the current test finishes, pass or fail.
+ *
+ * `bun test` loads this module once for all the test files of a run, so an
+ * `afterEach` at the top of this file would be attached only to the first
+ * file that imported it, and every later file would leave its Pi processes,
+ * servers and folders behind. On Windows those leftover Pi processes, each
+ * still polling its fake vault, slowed every later Pi start until it missed
+ * the 30 s wait. `onTestFinished` attaches to whichever test is running, in
+ * any file.
+ */
+function afterThisTest(close: () => Promise<unknown> | unknown) {
+  if (!armed) {
+    // Stopping Pi and removing its folders can take several seconds on
+    // Windows.
+    onTestFinished(async () => {
+      armed = false
+      for (const close of cleanup.splice(0).reverse()) await close()
+      const left = [...running].map((pi) => pi.pid)
+      if (left.length)
+        throw new Error(
+          `Pi still running after the test (pid ${left.join(', ')})`,
+        )
+    }, 60_000)
+    armed = true
+    // A Pi still running when a test starts outlived the test that started
+    // it: stop it with this test's cleanup, and fail this test.
+    const leaked = [...running]
+    if (leaked.length) {
+      cleanup.push(...leaked.map((pi) => () => pi.stop()), close)
+      throw new Error(
+        `Pi from an earlier test is still running (pid ${leaked.map((pi) => pi.pid).join(', ')})`,
+      )
+    }
+  }
+  cleanup.push(close)
+}
 
 export async function scratch(prefix: string) {
   // On Windows, common-auth refuses to write owner-only files below a folder
@@ -56,7 +95,7 @@ export async function scratch(prefix: string) {
       : path.join(root, 'target', 'scratch'))
   await mkdir(base, { recursive: true })
   const dir = await mkdtemp(path.join(base, `${prefix}-`))
-  cleanup.push(() =>
+  afterThisTest(() =>
     rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }),
   )
   return dir
@@ -85,7 +124,7 @@ export function piBundles() {
 
 async function listen(server: Server) {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  cleanup.push(
+  afterThisTest(
     () =>
       new Promise((resolve) => {
         server.closeAllConnections?.()
@@ -495,6 +534,16 @@ export class PiRpc {
       this.stderr += data
     })
     this.exited = new Promise((resolve) => child.on('exit', resolve))
+    running.add(this)
+    child.on('exit', () => running.delete(this))
+    // A Pi that never started has no process to wait for.
+    child.on('error', () => {
+      if (child.pid === undefined) running.delete(this)
+    })
+  }
+
+  get pid() {
+    return this.#child.pid ?? -1
   }
 
   #read(data: string) {
@@ -615,7 +664,14 @@ export class PiRpc {
   async stop() {
     if (this.#child.exitCode !== null) return
     this.#child.stdin?.end()
-    const timer = setTimeout(() => this.#child.kill(), 10_000)
+    // Pi exits when its input ends. If it does not, it is killed; on Windows
+    // the whole process tree is ended with taskkill, because killing only
+    // Pi there would leave its children running.
+    const timer = setTimeout(() => {
+      if (process.platform === 'win32' && this.#child.pid)
+        killTree(this.#child.pid)
+      else this.#child.kill()
+    }, 10_000)
     await this.exited
     clearTimeout(timer)
   }
@@ -674,10 +730,73 @@ export async function startPi(options: PiOptions) {
     },
   )
   const pi = new PiRpc(child, options.confirm)
-  cleanup.push(() => pi.stop())
+  afterThisTest(() => pi.stop())
   // Wait for startup, and keep Pi's own retries from hiding what the plugin did.
   await pi.command({ type: 'set_auto_retry', enabled: false })
   return pi
+}
+
+export interface ProcessRow {
+  pid: number
+  parent: number
+  name: string
+  /** Windows only: when the process started, to tell a reused PID apart. */
+  created?: number
+}
+
+/** Every process on the machine, from one snapshot. */
+async function processes(): Promise<ProcessRow[]> {
+  if (process.platform === 'win32') return windowsProcesses()
+  const listed = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,comm='], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  })
+  if (listed.status !== 0)
+    throw new Error(`ps failed: ${listed.error ?? listed.stderr}`)
+  return listed.stdout
+    .split('\n')
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/u))
+    .filter((match) => match !== null)
+    .map(([, pid, parent, name]) => ({
+      pid: Number(pid),
+      parent: Number(parent),
+      name: name ?? '',
+    }))
+}
+
+/** A running process and every process below it. */
+export async function processTree(root: number) {
+  const rows = await processes()
+  const tree = rows.filter((row) => row.pid === root)
+  for (let added = true; added; ) {
+    added = false
+    for (const row of rows)
+      if (
+        !tree.includes(row) &&
+        tree.some((member) => member.pid === row.parent)
+      ) {
+        tree.push(row)
+        added = true
+      }
+  }
+  return tree
+}
+
+/**
+ * The processes of an earlier `processTree` that are still running. The
+ * parent is not compared: a child whose parent exited is moved to another
+ * parent on Linux and macOS.
+ */
+export async function stillRunning(tree: ProcessRow[]) {
+  const rows = await processes()
+  return tree.filter((member) =>
+    rows.some(
+      (row) =>
+        row.pid === member.pid &&
+        row.name === member.name &&
+        row.created === member.created,
+    ),
+  )
 }
 
 /** Wait until a condition on files or counters holds. */

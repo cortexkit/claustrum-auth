@@ -33,10 +33,12 @@ import {
   filesUnder,
   mockProvider,
   placeholderOf,
+  processTree,
   readAuth,
   row,
   secretOf,
   startPi,
+  stillRunning,
 } from './harness.ts'
 
 // The npm install alone can take a minute on a cold Windows runner.
@@ -211,7 +213,13 @@ describe.skipIf(!e2e)(
         | { name: string }[]
         | undefined
       const commands = (listed ?? []).map((command) => command.name)
+      // The dedicated plugins run inside Pi; whatever they started (timers,
+      // polls, child processes) must end with it.
+      const tree = await processTree(pi.pid)
+      console.log(`Pi process tree: ${JSON.stringify(tree)}`)
+      expect(tree.map((row) => row.pid)).toContain(pi.pid)
       await pi.stop()
+      expect(await stillRunning(tree)).toEqual([])
 
       // claustrum-auth registered only the shipped table's providers, none of
       // the reserved ones, and never read a reserved row.
