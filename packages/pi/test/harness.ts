@@ -13,6 +13,7 @@ import {
   type ServerResponse,
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
@@ -37,12 +38,15 @@ afterEach(async () => {
 }, 60_000)
 
 export async function scratch(prefix: string) {
-  // On Windows, common-auth refuses to write owner-only files below a junction
-  // or symlink. If the checkout sits under one, set CLAUSTRUM_AUTH_PI_SCRATCH
-  // to a folder that does not.
+  // On Windows, common-auth refuses to write owner-only files below a folder
+  // other users may change (a CI checkout under D:\a\ is one) or below a
+  // junction or symlink, so the scratch goes in the user's own temp folder.
+  // CLAUSTRUM_AUTH_PI_SCRATCH overrides both.
   const base =
     process.env.CLAUSTRUM_AUTH_PI_SCRATCH ??
-    path.join(root, 'target', 'scratch')
+    (process.platform === 'win32'
+      ? path.join(os.tmpdir(), 'claustrum-auth-scratch')
+      : path.join(root, 'target', 'scratch'))
   await mkdir(base, { recursive: true })
   const dir = await mkdtemp(path.join(base, `${prefix}-`))
   cleanup.push(() =>
