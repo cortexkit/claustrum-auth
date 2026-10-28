@@ -83,6 +83,80 @@ function afterThisTest(close: () => Promise<unknown> | unknown) {
   cleanup.push(close)
 }
 
+/** How long a Windows scratch removal keeps retrying a sharing violation. */
+const SCRATCH_REMOVE_BUDGET_MS = 10_000
+/** Pause between scratch removal retries on Windows. */
+const SCRATCH_REMOVE_INTERVAL_MS = 250
+
+export interface ScratchRemoveRetry {
+  /** Defaults to removing `dir` with `rm -rf`. */
+  readonly remove?: (dir: string) => Promise<void>
+  /** Defaults to `Bun.sleep`. */
+  readonly sleep?: (ms: number) => Promise<void>
+  /** Defaults to `Date.now`. */
+  readonly now?: () => number
+  /** Defaults to `process.platform`. */
+  readonly platform?: string
+  /** Defaults to 10 s. */
+  readonly budgetMs?: number
+  /** Defaults to 250 ms. */
+  readonly intervalMs?: number
+  /** Called before every retry. */
+  readonly onRetry?: (retry: {
+    code: string
+    attempt: number
+    elapsedMs: number
+  }) => void
+}
+
+/**
+ * Removes a scratch folder. On Windows a sharing violation (EBUSY or EPERM)
+ * is retried for a bounded time: virus scanners and the private-files native
+ * addon open files without delete sharing, so removing a folder whose files
+ * were just written or read can fail even though this process holds nothing
+ * open — and the `rm` retry options alone do not cover it under Bun. Every
+ * retry is reported, so a real leak holding the folder open still shows as an
+ * unbroken run of retries before the final throw. Other platforms remove
+ * once: deleting an open file succeeds there, so a failure is never a
+ * transient hold.
+ */
+export async function removeScratchDir(
+  dir: string,
+  retry: ScratchRemoveRetry = {},
+): Promise<void> {
+  const platform = retry.platform ?? process.platform
+  const budgetMs = retry.budgetMs ?? SCRATCH_REMOVE_BUDGET_MS
+  const intervalMs = retry.intervalMs ?? SCRATCH_REMOVE_INTERVAL_MS
+  const remove =
+    retry.remove ??
+    ((target: string) =>
+      rm(target, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 200,
+      }))
+  const sleep = retry.sleep ?? ((ms: number) => Bun.sleep(ms))
+  const now = retry.now ?? (() => Date.now())
+  const started = now()
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await remove(dir)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code ?? 'unknown'
+      if (
+        platform !== 'win32' ||
+        (code !== 'EBUSY' && code !== 'EPERM') ||
+        now() - started >= budgetMs
+      )
+        throw error
+      retry.onRetry?.({ code, attempt, elapsedMs: now() - started })
+      await sleep(intervalMs)
+    }
+  }
+}
+
 export async function scratch(prefix: string) {
   // On Windows, common-auth refuses to write owner-only files below a folder
   // other users may change (a CI checkout under D:\a\ is one) or below a
@@ -96,7 +170,12 @@ export async function scratch(prefix: string) {
   await mkdir(base, { recursive: true })
   const dir = await mkdtemp(path.join(base, `${prefix}-`))
   afterThisTest(() =>
-    rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }),
+    removeScratchDir(dir, {
+      onRetry: ({ code, attempt, elapsedMs }) =>
+        console.warn(
+          `claustrum-auth pi scratch removal hit ${code}, retrying (attempt ${attempt} after ${elapsedMs}ms): ${dir}`,
+        ),
+    }),
   )
   return dir
 }
