@@ -25,6 +25,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { hostEnrollmentPaths } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { apiKeyRow } from '../../../core/test/vault-rows.ts'
 import { scratchRoot } from '../scratch-root.ts'
 import type { VaultControl } from './fixture-plugin.ts'
 
@@ -45,20 +46,10 @@ export function vaultRow(
   provider: string,
   extra: Record<string, unknown> = {},
 ) {
-  return {
-    id,
+  return apiKeyRow(id, [provider], {
     accountId: `account-${id}`,
-    categories: ['llm-provider'],
-    credentialType: 'api_key',
-    authMethod: 'apikey',
-    providerIds: [provider],
-    serves: [],
-    operations: ['read'],
-    state: 'active',
-    recordVersion: 1,
-    createdAtMs: null,
     ...extra,
-  }
+  })
 }
 
 export async function seedEnrollment(stateDir: string) {

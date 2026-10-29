@@ -8,6 +8,7 @@ import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { apiKeyRow } from '../../../core/test/vault-rows.ts'
 import {
   createTestCore,
   fixtureEntries,
@@ -70,20 +71,10 @@ export function row(
   id: string,
   overrides: Partial<ScopedInventoryRow> = {},
 ): ScopedInventoryRow {
-  return {
-    id,
+  return apiKeyRow(id, ['fixture-a'], {
     accountId: `listed-${id}`,
-    categories: ['llm-provider'],
-    credentialType: 'api_key',
-    authMethod: 'apikey',
-    providerIds: ['fixture-a'],
-    serves: [],
-    operations: ['read'],
-    state: 'active',
-    recordVersion: 1,
-    createdAtMs: null,
     ...overrides,
-  }
+  })
 }
 
 type Hook = (draft: never) => unknown
@@ -360,8 +351,7 @@ export async function startServer(
         // Custody refuses an OAuth read with no expiry, so an OAuth row is
         // served with an hour left, as the vault serves a minted token.
         expiresAtMs:
-          vault.rows.find((r) => r.id === credentialId)?.credentialType ===
-          'oauth'
+          vault.rows.find((r) => r.id === credentialId)?.authMethod === 'oauth'
             ? Date.now() + 3_600_000
             : null,
       }

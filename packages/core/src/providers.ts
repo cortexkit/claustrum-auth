@@ -207,14 +207,14 @@ export function classifyRow(
   table: readonly ProviderEntry[] = supportedProviders,
 ): ReturnType<ClassifyingClaustrumFamily<RefusalCode>['classify']> {
   const refused = (code: RefusalCode) => ({ kind: 'refused' as const, code })
+  if (!row.authMethod) return refused('no-auth-method')
   if (!row.providerIds) return refused('unmapped')
   if (
     row.authMethod === 'chatgpt' ||
     row.authMethod === 'antigravity' ||
-    (row.credentialType === 'oauth' && row.refreshAdapter === 'anthropic')
+    (row.authMethod === 'oauth' && row.refreshAdapter === 'anthropic')
   )
     return { kind: 'not-mine' }
-  if (!row.authMethod) return refused('no-auth-method')
   const entry = row.providerIds.length
     ? entryForFleetIds(row.providerIds, table)
     : table.find((candidate) =>

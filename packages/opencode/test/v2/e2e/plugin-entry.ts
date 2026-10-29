@@ -25,6 +25,7 @@ import {
   createTestCore,
   fixtureEntries,
   type ProviderEntry,
+  supportedProviders,
 } from '../../../../core/test-entry.ts'
 import { opencodeStateDir } from '../../../src/state-dir.ts'
 import { setupServer } from '../../../src/v2/setup.ts'
@@ -67,6 +68,9 @@ const classA = (id: string): ProviderEntry => ({
  * a base URL on another origin.
  */
 export const table: readonly ProviderEntry[] = [
+  ...supportedProviders
+    .filter((entry) => entry.service !== 'xai')
+    .map((entry) => ({ ...entry, origins: [ORIGIN] })),
   classA('fixture-a'),
   {
     ...base('fixture-b'),

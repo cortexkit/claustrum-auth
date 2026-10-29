@@ -12,6 +12,7 @@ import {
   type ProviderEntry,
   supportedProviders,
 } from '../test-entry.ts'
+import { apiKeyRow } from './vault-rows.ts'
 
 const cleanup: (() => Promise<unknown>)[] = []
 // Every scratch folder this helper created that has not been removed yet.
@@ -60,20 +61,10 @@ export function row(
   id: string,
   overrides: Partial<ScopedInventoryRow> = {},
 ): ScopedInventoryRow {
-  return {
-    id,
+  return apiKeyRow(id, ['fixture-a'], {
     accountId: `account-${id}`,
-    categories: ['llm-provider'],
-    credentialType: 'api_key',
-    authMethod: 'apikey',
-    providerIds: ['fixture-a'],
-    serves: [],
-    operations: ['read'],
-    state: 'active',
-    recordVersion: 1,
-    createdAtMs: null,
     ...overrides,
-  }
+  })
 }
 
 export async function harness(rows = [row('a')], host: Host = 'opencode1') {
@@ -137,7 +128,7 @@ async function withTable(
       // Custody refuses an OAuth read with no expiry, so an OAuth row is served
       // with an hour left, as the vault serves a minted token.
       expiresAtMs:
-        listed?.credentialType === 'oauth' ? Date.now() + 3_600_000 : null,
+        listed?.authMethod === 'oauth' ? Date.now() + 3_600_000 : null,
     }
   }
   const client: ClaustrumScopedClient = {
@@ -219,7 +210,13 @@ export function vaultRowFor(
   const oauth = entry.service === 'meta' || entry.service === 'xai'
   return row(byCredential ?? `${oauth ? 'oauth' : 'apikey'}:${entry.service}`, {
     providerIds: byCredential ? [] : [entry.ids[0] as string],
-    ...(oauth ? { credentialType: 'oauth', authMethod: 'oauth' } : {}),
+    ...(oauth
+      ? {
+          credentialType: 'oauth',
+          authMethod: 'oauth',
+          refreshAdapter: entry.service,
+        }
+      : {}),
     ...overrides,
   })
 }

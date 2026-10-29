@@ -7,13 +7,16 @@ import {
   catalogEntries,
   classifyingFamily,
   classifyRow,
+  createFetch,
   fixtureEntries,
   type Host,
   type HostFacts,
   reservedProviders,
   supportedProviders,
+  vaultMenuText,
 } from '../test-entry.ts'
-import { harness, row } from './fakes.ts'
+import { bearer, harness, liveHarness, placeholder, row } from './fakes.ts'
+import { realVaultRows } from './vault-rows.ts'
 
 const hosts: Host[] = ['opencode1', 'opencode2', 'pi']
 function facts(host: Host): HostFacts {
@@ -32,9 +35,9 @@ function fact(
 ): VaultRowFacts {
   return {
     credentialId: 'opaque-id',
-    credentialType: 'api_key',
+    credentialType: 'apikey',
     categories: ['llm-provider'],
-    authMethod: 'api-key',
+    authMethod: 'apikey',
     providerIds,
     ...extra,
   }
@@ -166,7 +169,7 @@ test('classification gates are ordered and refusal codes are closed', () => {
     classifyRow(value, { ...facts('opencode2'), ...changes }, catalogEntries)
   expect(
     run(fact([], { providerIds: undefined, authMethod: undefined })),
-  ).toEqual({ kind: 'refused', code: 'unmapped' })
+  ).toEqual({ kind: 'refused', code: 'no-auth-method' })
   expect(run(fact(['meta'], { authMethod: undefined }))).toEqual({
     kind: 'refused',
     code: 'no-auth-method',
@@ -183,6 +186,62 @@ test('classification gates are ordered and refusal codes are closed', () => {
     kind: 'refused',
     code: 'integration-mismatch',
   })
+})
+
+test('authMethod determines type regardless of credential id, type hint or refresher', async () => {
+  for (const hint of ['apikey', 'oauth', 'unknown']) {
+    expect(
+      classifyRow(
+        fact(['meta'], {
+          credentialId: 'oauth:misleading',
+          credentialType: hint,
+        }),
+        facts('pi'),
+      ),
+    ).toEqual({ kind: 'mine', member: 'meta' })
+    expect(
+      classifyRow(
+        fact(['meta'], {
+          credentialType: hint,
+          authMethod: 'oauth',
+          refreshAdapter: 'meta',
+        }),
+        facts('pi'),
+      ),
+    ).toEqual({ kind: 'mine', member: 'meta' })
+    expect(
+      classifyRow(
+        fact(['meta'], {
+          credentialType: hint,
+          authMethod: 'oauth',
+          refreshAdapter: 'anthropic',
+        }),
+        facts('pi'),
+      ),
+    ).toEqual({ kind: 'not-mine' })
+    expect(
+      classifyRow(
+        fact(['meta'], {
+          credentialType: hint,
+          authMethod: undefined,
+          refreshAdapter: 'meta',
+        }),
+        facts('pi'),
+      ),
+    ).toEqual({ kind: 'refused', code: 'no-auth-method' })
+  }
+  const h = await harness([
+    row('oauth:actually-a-key', { credentialType: 'oauth' }),
+    row('apikey:actually-oauth', {
+      authMethod: 'oauth',
+      refreshAdapter: 'fixture-a',
+    }),
+  ])
+  for (const id of ['oauth:actually-a-key', 'apikey:actually-oauth']) {
+    expect(await h.consumer.authorize(`vault:${id}`)).toMatchObject({
+      material: h.secretOf(id),
+    })
+  }
 })
 
 test('reserved matrix never admits reserved providers alone or beside others', () => {
@@ -217,7 +276,7 @@ test('reserved matrix never admits reserved providers alone or beside others', (
   ])
 })
 
-test('library gates category read and credential type and normalizes invalid classifications', async () => {
+test('library gates category and read and normalizes invalid classifications', async () => {
   const h = await harness([
     row('no-read', { operations: [] }),
     row('wrong-category', { categories: ['other'] }),
@@ -243,5 +302,84 @@ test('library gates category read and credential type and normalizes invalid cla
     ])
   } finally {
     custody.close()
+  }
+})
+
+test('shared vault fixtures retain the real metadata spelling and refresher presence', () => {
+  for (const row of realVaultRows.filter((row) =>
+    row.id.startsWith('apikey:'),
+  )) {
+    expect(row.credentialType).toBe('apikey')
+    expect(row).not.toHaveProperty('refreshAdapter')
+    if (row.id !== 'apikey:missing-auth-method')
+      expect(row.authMethod).toBe('apikey')
+  }
+  expect(realVaultRows.find((row) => row.id === 'oauth:cursor')).toMatchObject({
+    authMethod: 'oauth',
+    credentialType: 'oauth',
+    refreshAdapter: 'cursor',
+    providerIds: [],
+  })
+  expect(realVaultRows.find((row) => row.id === 'oauth:meta')).toMatchObject({
+    authMethod: 'oauth',
+    credentialType: 'oauth',
+    refreshAdapter: 'meta',
+    providerIds: ['meta'],
+  })
+})
+
+test('real vault metadata serves API keys on every host and refuses missing authMethod', async () => {
+  for (const host of hosts) {
+    const h = await liveHarness(realVaultRows, host)
+    const expected = [
+      ['cerebras', 'apikey:cerebras'],
+      ['opencode-go', 'apikey:opencode-go'],
+      ['meta', 'oauth:meta'],
+      ...(host === 'pi' ? [] : [['cline-pass', 'apikey:cline-pass']]),
+      ...(host === 'opencode2' ? [] : [['opencode', 'apikey:opencode-zen']]),
+    ]
+    for (const [provider, credentialId] of expected) {
+      const consumer = h.consumers.get(provider as string)
+      expect(consumer?.routingRows().map((row) => row.id)).toEqual([
+        `vault:${credentialId}`,
+      ])
+      const entry = supportedProviders.find(
+        (entry) => entry.hosts[host] === provider,
+      )
+      if (!consumer || !entry) throw new Error(`missing ${provider} on ${host}`)
+      let authorization = ''
+      const fetch = createFetch({
+        consumer,
+        entry,
+        placeholder,
+        fetch: async (request) => {
+          authorization =
+            (request as Request).headers.get('authorization') ?? ''
+          return new Response('ok')
+        },
+      })
+      await fetch(`${entry.origins[0]}/v1/chat/completions`, {
+        headers: bearer,
+      })
+      expect(authorization).toBe(`Bearer secret-${credentialId}-1`)
+    }
+    expect(h.hub.refusals()).toMatchObject({
+      notMine: 0,
+      refused: expect.arrayContaining([
+        { credentialId: 'apikey:missing-auth-method', code: 'no-auth-method' },
+      ]),
+    })
+    const refusals = await vaultMenuText(
+      {
+        authority: async () => 'vault',
+        hub: h.hub,
+        consumers: h.consumers,
+        providerStatus: () => 'available',
+      },
+      'refusals',
+    )
+    expect(refusals).toContain('Rows left to other plugins: 0')
+    expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
+    expect(h.reads).not.toContain('apikey:missing-auth-method')
   }
 })

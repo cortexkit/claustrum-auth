@@ -15,6 +15,7 @@ test('never report not-mine or refused rows through either core serving path', a
     row('antigravity', { authMethod: 'antigravity' }),
     row('anthropic-oauth', {
       credentialType: 'oauth',
+      authMethod: 'oauth',
       refreshAdapter: 'anthropic',
     }),
     ...[
@@ -158,7 +159,14 @@ test('redaction scrubs JSON SSE Location and thrown transport errors on both pat
 })
 
 test('ordered routing admits OAuth without quota in roster order and skips marks', async () => {
-  const h = await harness([row('b', { credentialType: 'oauth' }), row('a')])
+  const h = await harness([
+    row('b', {
+      credentialType: 'oauth',
+      authMethod: 'oauth',
+      refreshAdapter: 'fixture-a',
+    }),
+    row('a'),
+  ])
   const options = {
     entry: fixtureEntries[0],
     placeholder,
@@ -477,7 +485,13 @@ test('abort while buffering cancels the stream before any vault read', async () 
 })
 
 test('fresh physical sends use library TTL checks and kept 401s are never reported', async () => {
-  const h = await harness([row('oauth', { credentialType: 'oauth' })])
+  const h = await harness([
+    row('oauth', {
+      credentialType: 'oauth',
+      authMethod: 'oauth',
+      refreshAdapter: 'fixture-a',
+    }),
+  ])
   h.setGet(async (input) => {
     expect(input.minTtlMs).toBe(300_000)
     return {

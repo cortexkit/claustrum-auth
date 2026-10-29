@@ -323,9 +323,21 @@ xAI is an OAuth row too, so the same rule applies to `oauth:xai`.
 
 ## The operator's vault rows
 
-The plugin routes on row metadata only: the `llm-provider` category, the
-credential type, the auth method and `provider_ids` (design section 4.2), plus
-the one exact credential id above.
+The plugin routes on row metadata only: the `llm-provider` category,
+`authMethod` and `providerIds` (the wire's `provider_ids`),
+plus the one exact credential id above. `authMethod` alone determines the
+authentication type: `apikey`, `chatgpt`, `antigravity`, or `oauth`. The last
+three describe logins; ChatGPT and Antigravity belong to dedicated plugins.
+`credentialType` is only a hint parsed from the credential id, never a type
+decision. In particular, real API-key rows have `credentialType: "apikey"`
+and `authMethod: "apikey"`, with no `refreshAdapter`.
+
+`refreshAdapter` identifies a login's refresher when it has one, not its
+authentication type. It is consulted only for dedicated-plugin ownership,
+not to discover API keys, select a provider, or infer quota. `serves` names
+model families, not credential providers: Cerebras serving `openai` models
+does not make its key an OpenAI credential. Plan-tier metadata does not
+select the provider either.
 
 | credential | `provider_ids` | category | served as |
 | --- | --- | --- | --- |
@@ -343,7 +355,9 @@ the one exact credential id above.
 | `apikey:opencode-zen` | `opencode` | `llm-provider` | opencode on OpenCode 1 and Pi, bearer models only; refused `not-on-this-host` on OpenCode 2 |
 
 Each row must also carry an auth method and be enabled and active in the
-vault; a row without one is refused as `no-auth-method`.
+vault; a read row without `authMethod` is unknown and refused as
+`no-auth-method`, even if its id or `credentialType` looks familiar. The plugin
+never guesses a missing auth method from the id or refresher.
 
 **The `*-native` categories.** `meta-native` and `xai-native` mark rows a
 dedicated plugin may own later. The design does not reserve them: the plugin

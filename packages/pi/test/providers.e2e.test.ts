@@ -12,6 +12,7 @@
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { realVaultRows } from '../../core/test/vault-rows.ts'
 import {
   type AgentOptions,
   agentDir,
@@ -83,18 +84,23 @@ function override(
   }
 }
 
-const vaultRows = () =>
-  live.map((item) =>
-    row(item.credential, item.fleet, {
-      ...('oauth' in item
-        ? {
-            credentialType: 'oauth',
-            authMethod: 'oauth',
-            categories: ['llm-provider', `${item.fleet}-native`],
-          }
-        : {}),
-    }),
-  )
+const vaultRows = () => [
+  ...realVaultRows,
+  ...live
+    .filter((item) => !realVaultRows.some((row) => row.id === item.credential))
+    .map((item) =>
+      row(item.credential, item.fleet, {
+        ...('oauth' in item
+          ? {
+              credentialType: 'oauth',
+              authMethod: 'oauth',
+              refreshAdapter: item.fleet,
+              categories: ['llm-provider', `${item.fleet}-native`],
+            }
+          : {}),
+      }),
+    ),
+]
 
 // The mock, the fake vault holding every live row, and a Pi agent folder
 // whose models.json is built against the mock's origin. Pi is launched with
@@ -169,6 +175,9 @@ describe.skipIf(!e2e)('live providers on the real Pi host', () => {
       ),
     )
     const pi = await launch()
+    const refusals = await pi.slash('/claustrum refusals')
+    expect(refusals).toContain('Rows left to other plugins: 0')
+    expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
     for (const item of live) {
       expect([item.pi, await pi.slash(`/claustrum use ${item.pi}`)]).toEqual([
         item.pi,

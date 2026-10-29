@@ -24,6 +24,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { apiKeyRow } from '../../core/test/vault-rows.ts'
 import { windowsProcesses } from '../../opencode/test/v2/e2e/windows-processes.ts'
 import { buildPiBundle } from '../build.ts'
 import type { PiTestConfig } from '../test-entry.ts'
@@ -410,20 +411,10 @@ export function row(
   provider: string,
   overrides: Partial<ScopedInventoryRow> = {},
 ): ScopedInventoryRow {
-  return {
-    id,
+  return apiKeyRow(id, [provider], {
     accountId: `account-${id}`,
-    categories: ['llm-provider'],
-    credentialType: 'api_key',
-    authMethod: 'apikey',
-    providerIds: [provider],
-    serves: [],
-    operations: ['read'],
-    state: 'active',
-    recordVersion: 1,
-    createdAtMs: null,
     ...overrides,
-  }
+  })
 }
 
 export const secretOf = (id: string, version = 1) => `secret-${id}-${version}-x`
@@ -475,7 +466,7 @@ export async function fakeVault(initial: ScopedInventoryRow[] = []) {
         // Custody refuses an OAuth read with no expiry, so an OAuth row is
         // served with an hour left, as the vault serves a minted token.
         expiresAtMs:
-          listed.credentialType === 'oauth' ? Date.now() + 3_600_000 : null,
+          listed.authMethod === 'oauth' ? Date.now() + 3_600_000 : null,
       })
     }
     if (op === 'report') {

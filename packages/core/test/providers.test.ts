@@ -31,7 +31,7 @@ type Outcome =
 const vaultRows: {
   credential: string
   providerIds: readonly string[]
-  credentialType?: 'oauth' | 'api_key'
+  credentialType?: 'oauth' | 'apikey'
   categories?: readonly string[]
   expected: (host: Host) => Outcome
 }[] = [
@@ -130,8 +130,8 @@ const hosts: Host[] = ['opencode1', 'opencode2', 'pi']
 function facts(item: (typeof vaultRows)[number]) {
   return {
     credentialId: item.credential,
-    credentialType: item.credentialType ?? 'api_key',
-    authMethod: item.credentialType === 'oauth' ? 'oauth' : 'api-key',
+    credentialType: item.credentialType ?? 'apikey',
+    authMethod: item.credentialType === 'oauth' ? 'oauth' : 'apikey',
     categories: item.categories ?? ['llm-provider'],
     providerIds: item.providerIds,
   }
@@ -277,8 +277,8 @@ test('cline-pass is served by its exact credential id only while the row has no 
 test('fleet ids map to each host id: fireworks-ai on Pi is fireworks, kimi-code-plan-global is kimi on both hosts', () => {
   const row = (providerIds: string[]) => ({
     credentialId: 'opaque',
-    credentialType: 'api_key',
-    authMethod: 'api-key',
+    credentialType: 'apikey',
+    authMethod: 'apikey',
     categories: ['llm-provider'],
     providerIds,
   })
@@ -312,8 +312,8 @@ test('a row naming this batch beside another service is refused rather than gues
     classifyRow(
       {
         credentialId: 'opaque',
-        credentialType: 'api_key',
-        authMethod: 'api-key',
+        credentialType: 'apikey',
+        authMethod: 'apikey',
         categories: ['llm-provider'],
         providerIds: ['deepseek', 'openrouter'],
       },
@@ -324,8 +324,8 @@ test('a row naming this batch beside another service is refused rather than gues
     classifyRow(
       {
         credentialId: 'opaque',
-        credentialType: 'api_key',
-        authMethod: 'api-key',
+        credentialType: 'apikey',
+        authMethod: 'apikey',
         categories: ['llm-provider'],
         providerIds: ['deepseek', 'google'],
       },
@@ -339,8 +339,8 @@ test('a live provider is refused on a host whose catalog no longer knows it', ()
     classifyRow(
       {
         credentialId: 'apikey:openrouter',
-        credentialType: 'api_key',
-        authMethod: 'api-key',
+        credentialType: 'apikey',
+        authMethod: 'apikey',
         categories: ['llm-provider'],
         providerIds: ['openrouter'],
       },
@@ -373,7 +373,11 @@ test('a shipped provider serves its vault row only to its documented origin', as
         ? [
             row(item.credential, {
               providerIds: item.providerIds,
-              credentialType: item.credentialType ?? 'api_key',
+              credentialType: item.credentialType ?? 'apikey',
+              authMethod: item.credentialType === 'oauth' ? 'oauth' : 'apikey',
+              ...(item.credentialType === 'oauth'
+                ? { refreshAdapter: item.providerIds[0] }
+                : {}),
               categories: [...(item.categories ?? ['llm-provider'])],
               accountId: `account-${item.credential}`,
             }),

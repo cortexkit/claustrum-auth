@@ -26,6 +26,7 @@ import {
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
+import { realVaultRows } from '../../../../core/test/vault-rows.ts'
 import { fixtureEntries } from '../../../../core/test-entry.ts'
 import { resolveOpencodeStateDir } from '../../../src/state-dir.ts'
 import { setupIO, setupTestBuild } from '../../setup-harness.ts'
@@ -84,6 +85,7 @@ function providerConfig(
     ...more,
   })
   return {
+    cerebras: chat(`${mock.url}/v1`),
     'fixture-a': chat(`${mock.url}/v1`),
     'fixture-b': chat(
       `${mock.url}/client/v4/accounts/configured-account/ai/v1`,
@@ -588,6 +590,45 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
     expect(probe.stdout.trim()).toBe(env.HOME)
     expect(env.HOME).not.toBe(homedir())
   })
+
+  test('real vault API-key metadata is served and missing authMethod is refused', async () => {
+    await scenario(
+      realVaultRows.map((row) => ({
+        ...row,
+        providerIds: row.providerIds ?? [],
+      })),
+      async (run) => {
+        expect((await run.login('cerebras')).exit).toBe(0)
+        expect((await run.turn('cerebras')).exit).toBe(0)
+        expect(
+          run.mock.records.some((record) =>
+            record.headers.some(
+              ([name, value]) =>
+                name.toLowerCase() === 'authorization' &&
+                value === `Bearer ${run.vault.secret('apikey:cerebras')}`,
+            ),
+          ),
+        ).toBe(true)
+        expect(run.vault.reads).toEqual(['apikey:cerebras'])
+        const session = (await run.api('POST', '/api/session', {
+          location: { directory: run.project },
+        })) as { data: { id: string } }
+        await run.api('POST', `/api/session/${session.data.id}/command`, {
+          name: 'claustrum',
+          text: 'refusals',
+        })
+        const refusals =
+          JSON.stringify(
+            await run.api('GET', `/api/session/${session.data.id}/inbox`),
+          ) +
+          JSON.stringify(
+            await run.api('GET', `/api/session/${session.data.id}/message`),
+          )
+        expect(refusals).toContain('Rows left to other plugins: 0')
+        expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
+      },
+    )
+  }, 600_000)
 
   test.skipIf(process.env.CLAUSTRUM_AUTH_SETUP_E2E !== '1')(
     'setup test build enrolls a clean OpenCode 2 profile and its printed activation serves a fixture request',

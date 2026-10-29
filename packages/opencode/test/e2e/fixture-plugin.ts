@@ -6,19 +6,21 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import type { PluginModule } from '@opencode-ai/plugin'
 import {
   createTestCore,
   fixtureEntries,
   pluginId,
+  supportedProviders,
 } from '../../../core/test-entry.ts'
 import { opencode1Hosts } from '../../src/v1/plugin.ts'
 
 export interface VaultControl {
   active: boolean
   outage: boolean
-  rows: Record<string, unknown>[]
+  rows: ScopedInventoryRow[]
   served: Record<
     string,
     { material: string; accountId?: string | null; recordVersion?: number }
@@ -68,9 +70,14 @@ export function fixtureClient(directory: string): ClaustrumScopedClient {
         accountId:
           served.accountId === null
             ? undefined
-            : (served.accountId ?? `account-${credentialId}`),
+            : (served.accountId ??
+              state.rows.find((row) => row.id === credentialId)?.accountId),
         recordVersion: served.recordVersion ?? 1,
-        expiresAtMs: null,
+        expiresAtMs:
+          state.rows.find((row) => row.id === credentialId)?.authMethod ===
+          'oauth'
+            ? Date.now() + 3_600_000
+            : null,
       }
     },
     async reportAuthFailureScoped(input) {
@@ -81,7 +88,10 @@ export function fixtureClient(directory: string): ClaustrumScopedClient {
 }
 const client = fixtureClient(dir)
 
-const table = fixtureEntries.map((entry) => ({ ...entry, origins: [origin] }))
+const table = [...fixtureEntries, ...supportedProviders].map((entry) => ({
+  ...entry,
+  origins: [origin],
+}))
 
 const plugin = {
   id: pluginId,

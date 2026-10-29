@@ -4,6 +4,7 @@ import {
   enrollmentAuthority,
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
+import { realVaultRows } from '../../core/test/vault-rows.ts'
 import { fixtureEntries } from '../../core/test-entry.ts'
 import { resolveOpencodeStateDir } from '../src/state-dir.ts'
 import { fixtureClient } from './e2e/fixture-plugin.ts'
@@ -139,6 +140,36 @@ describe.skipIf(!enabled)(`OpenCode 1 real host (${process.platform})`, () => {
       expect((await h.turn(A)).error).toBeUndefined()
       expect(turns().map((request) => request.headers.authorization)).toEqual([
         'Bearer setup-vault-key',
+      ])
+      await stopAll()
+    },
+    timeout,
+  )
+
+  test(
+    'real vault API-key metadata is served and missing authMethod is refused',
+    async () => {
+      reset()
+      const p = await profile('real-metadata', mock, {
+        rows: realVaultRows,
+        served: { 'apikey:cerebras': { material: 'real-shape-cerebras-key' } },
+      })
+      const providers = fixtureProviders(mock.origin)
+      await p.config({ ...providers, cerebras: providers[A] })
+      await p.setAuth({
+        cerebras: { type: 'api', key: placeholderOf('cerebras') },
+      })
+      const h = await host(p)
+      expect((await h.turn('cerebras')).error).toBeUndefined()
+      expect(turns().map((request) => request.headers.authorization)).toEqual([
+        'Bearer real-shape-cerebras-key',
+      ])
+      const session = await h.session()
+      const refusals = await h.command(session, 'refusals')
+      expect(refusals).toContain('Rows left to other plugins: 0')
+      expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
+      expect((await gets(p)).map((entry) => entry.credentialId)).toEqual([
+        'apikey:cerebras',
       ])
       await stopAll()
     },

@@ -4,9 +4,12 @@
 // inside the host are the real ones; only the vault behind them is fake.
 // Every call is counted, so a test can assert zero reads and exact reports.
 
-export interface VaultRow {
+import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
+import { apiKeyRow } from '../../../../core/test/vault-rows.ts'
+
+export interface VaultRow extends Partial<ScopedInventoryRow> {
   readonly id: string
-  readonly providerIds: readonly string[]
+  readonly providerIds: string[]
   /** The account the listing names; undefined for none. */
   readonly accountId?: string
   /** The account `get_scoped` asserts; defaults to the listed one. */
@@ -59,21 +62,12 @@ export function startFakeVault(rows: VaultRow[]): FakeVault {
       if (op === 'list')
         return Response.json({
           result: {
-            rows: vault.rows.map((row) => ({
-              id: row.id,
-              ...(row.accountId === undefined
-                ? {}
-                : { accountId: row.accountId }),
-              categories: ['llm-provider'],
-              credentialType: 'api_key',
-              authMethod: 'apikey',
-              providerIds: row.providerIds,
-              serves: [],
-              operations: ['read'],
-              state: 'active',
-              recordVersion: vault.version,
-              createdAtMs: null,
-            })),
+            rows: vault.rows.map(({ servedAccountId: _, ...row }) =>
+              apiKeyRow(row.id, row.providerIds, {
+                ...row,
+                recordVersion: vault.version,
+              }),
+            ),
             view: `view-${vault.version}-${vault.rows.map((row) => row.id).join(',')}`,
           },
         })
@@ -90,7 +84,8 @@ export function startFakeVault(rows: VaultRow[]): FakeVault {
             material: vault.secret(row.id),
             ...(account === undefined ? {} : { accountId: account }),
             recordVersion: vault.version,
-            expiresAtMs: null,
+            expiresAtMs:
+              row.authMethod === 'oauth' ? Date.now() + 3_600_000 : null,
           },
         })
       }
