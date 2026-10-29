@@ -68,7 +68,7 @@ const classA = (id: string): ProviderEntry => ({
  * a base URL on another origin.
  */
 export const table: readonly ProviderEntry[] = [
-  ...supportedProviders
+  ...(env('CLAUSTRUM_AUTH_E2E_REAL_ROWS') === '1' ? supportedProviders : [])
     .filter((entry) => entry.service !== 'xai')
     .map((entry) => ({ ...entry, origins: [ORIGIN] })),
   classA('fixture-a'),

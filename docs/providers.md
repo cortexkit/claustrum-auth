@@ -356,7 +356,8 @@ select the provider either.
 
 Each row must also carry an auth method and be enabled and active in the
 vault; a read row without `authMethod` is unknown and refused as
-`no-auth-method`, even if its id or `credentialType` looks familiar. The plugin
+`unknown-auth-method` by common-auth, even if its id or `credentialType`
+looks familiar. The plugin
 never guesses a missing auth method from the id or refresher.
 
 **The `*-native` categories.** `meta-native` and `xai-native` mark rows a

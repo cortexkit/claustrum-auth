@@ -600,16 +600,22 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
       async (run) => {
         expect((await run.login('cerebras')).exit).toBe(0)
         expect((await run.turn('cerebras')).exit).toBe(0)
+        const sends = run.mock.records.filter(
+          (record) => record.kind === 'primary' || record.kind === 'title',
+        )
         expect(
-          run.mock.records.some((record) =>
-            record.headers.some(
-              ([name, value]) =>
-                name.toLowerCase() === 'authorization' &&
-                value === `Bearer ${run.vault.secret('apikey:cerebras')}`,
-            ),
-          ),
-        ).toBe(true)
-        expect(run.vault.reads).toEqual(['apikey:cerebras'])
+          sends.filter((record) => record.kind === 'primary'),
+        ).toHaveLength(1)
+        expect(sends.filter((record) => record.kind === 'title')).toHaveLength(
+          1,
+        )
+        for (const send of sends)
+          expect(send.authorization).toBe(
+            `Bearer ${run.vault.secret('apikey:cerebras')}`,
+          )
+        // Title generation is a second physical send, so it needs its own
+        // fresh vault authorization just like the primary model request.
+        expect(run.vault.reads).toEqual(sends.map(() => 'apikey:cerebras'))
         const session = (await run.api('POST', '/api/session', {
           location: { directory: run.project },
         })) as { data: { id: string } }
@@ -625,7 +631,14 @@ describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
             await run.api('GET', `/api/session/${session.data.id}/message`),
           )
         expect(refusals).toContain('Rows left to other plugins: 0')
-        expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
+        expect(refusals).toContain(
+          'apikey:missing-auth-method: unknown-auth-method',
+        )
+      },
+      {
+        beforeStart: async (run) => {
+          run.env.CLAUSTRUM_AUTH_E2E_REAL_ROWS = '1'
+        },
       },
     )
   }, 600_000)

@@ -155,6 +155,7 @@ describe.skipIf(!enabled)(`OpenCode 1 real host (${process.platform})`, () => {
         served: { 'apikey:cerebras': { material: 'real-shape-cerebras-key' } },
       })
       const providers = fixtureProviders(mock.origin)
+      p.env.CLAUSTRUM_AUTH_E2E_REAL_ROWS = '1'
       await p.config({ ...providers, cerebras: providers[A] })
       await p.setAuth({
         cerebras: { type: 'api', key: placeholderOf('cerebras') },
@@ -167,10 +168,15 @@ describe.skipIf(!enabled)(`OpenCode 1 real host (${process.platform})`, () => {
       const session = await h.session()
       const refusals = await h.command(session, 'refusals')
       expect(refusals).toContain('Rows left to other plugins: 0')
-      expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
-      expect((await gets(p)).map((entry) => entry.credentialId)).toEqual([
-        'apikey:cerebras',
-      ])
+      expect(refusals).toContain(
+        'apikey:missing-auth-method: unknown-auth-method',
+      )
+      // The first turn also generates a title. Each physical send must read
+      // the same owned credential, rather than reusing a token across sends.
+      expect(mock.requests.filter((request) => request.title)).toHaveLength(1)
+      expect((await gets(p)).map((entry) => entry.credentialId)).toEqual(
+        mock.requests.map(() => 'apikey:cerebras'),
+      )
       await stopAll()
     },
     timeout,

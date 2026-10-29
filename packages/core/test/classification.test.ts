@@ -35,7 +35,7 @@ function fact(
 ): VaultRowFacts {
   return {
     credentialId: 'opaque-id',
-    credentialType: 'apikey',
+    credentialType: 'api_key',
     categories: ['llm-provider'],
     authMethod: 'apikey',
     providerIds,
@@ -167,12 +167,9 @@ test('classification maps fleet ids to each host id and refuses host ids and unk
 test('classification gates are ordered and refusal codes are closed', () => {
   const run = (value: VaultRowFacts, changes: Partial<HostFacts> = {}) =>
     classifyRow(value, { ...facts('opencode2'), ...changes }, catalogEntries)
-  expect(
-    run(fact([], { providerIds: undefined, authMethod: undefined })),
-  ).toEqual({ kind: 'refused', code: 'no-auth-method' })
-  expect(run(fact(['meta'], { authMethod: undefined }))).toEqual({
+  expect(run(fact([], { providerIds: undefined }))).toEqual({
     kind: 'refused',
-    code: 'no-auth-method',
+    code: 'unmapped',
   })
   expect(run(fact(['unknown']))).toEqual({
     kind: 'refused',
@@ -188,58 +185,45 @@ test('classification gates are ordered and refusal codes are closed', () => {
   })
 })
 
-test('authMethod determines type regardless of credential id, type hint or refresher', async () => {
+test('authMethod determines custody type regardless of credential id, type hint or refresher', async () => {
   for (const hint of ['apikey', 'oauth', 'unknown']) {
-    expect(
-      classifyRow(
-        fact(['meta'], {
-          credentialId: 'oauth:misleading',
-          credentialType: hint,
-        }),
-        facts('pi'),
-      ),
-    ).toEqual({ kind: 'mine', member: 'meta' })
-    expect(
-      classifyRow(
-        fact(['meta'], {
-          credentialType: hint,
-          authMethod: 'oauth',
-          refreshAdapter: 'meta',
-        }),
-        facts('pi'),
-      ),
-    ).toEqual({ kind: 'mine', member: 'meta' })
-    expect(
-      classifyRow(
-        fact(['meta'], {
-          credentialType: hint,
-          authMethod: 'oauth',
-          refreshAdapter: 'anthropic',
-        }),
-        facts('pi'),
-      ),
-    ).toEqual({ kind: 'not-mine' })
-    expect(
-      classifyRow(
-        fact(['meta'], {
-          credentialType: hint,
-          authMethod: undefined,
-          refreshAdapter: 'meta',
-        }),
-        facts('pi'),
-      ),
-    ).toEqual({ kind: 'refused', code: 'no-auth-method' })
-  }
-  const h = await harness([
-    row('oauth:actually-a-key', { credentialType: 'oauth' }),
-    row('apikey:actually-oauth', {
-      authMethod: 'oauth',
-      refreshAdapter: 'fixture-a',
-    }),
-  ])
-  for (const id of ['oauth:actually-a-key', 'apikey:actually-oauth']) {
-    expect(await h.consumer.authorize(`vault:${id}`)).toMatchObject({
-      material: h.secretOf(id),
+    const h = await harness([
+      row('oauth:actually-a-key', { credentialType: hint }),
+      row('apikey:actually-oauth', {
+        credentialType: hint,
+        authMethod: 'oauth',
+        refreshAdapter: 'fixture-a',
+      }),
+      row('missing-method', {
+        credentialType: hint,
+        authMethod: undefined,
+        refreshAdapter: 'fixture-a',
+      }),
+      row('anthropic-login', {
+        credentialType: hint,
+        authMethod: 'oauth',
+        refreshAdapter: 'anthropic',
+      }),
+    ])
+    expect(h.consumer.routingRows()).toHaveLength(2)
+    const roster = h.consumer.snapshot()?.rows ?? []
+    expect(roster.map((row) => row.credentialId).sort()).toEqual([
+      'apikey:actually-oauth',
+      'oauth:actually-a-key',
+    ])
+    // authMethod, not the id or its type hint, decides the served type.
+    for (const row of roster) {
+      expect(await h.consumer.authorize(row.routeId)).toMatchObject({
+        credentialType:
+          row.credentialId === 'apikey:actually-oauth' ? 'oauth' : 'api_key',
+        accessToken: h.secretOf(row.credentialId),
+      })
+    }
+    expect(h.hub.refusals()).toMatchObject({
+      notMine: 1,
+      refused: [
+        { credentialId: 'missing-method', code: 'unknown-auth-method' },
+      ],
     })
   }
 })
@@ -366,7 +350,10 @@ test('real vault metadata serves API keys on every host and refuses missing auth
     expect(h.hub.refusals()).toMatchObject({
       notMine: 0,
       refused: expect.arrayContaining([
-        { credentialId: 'apikey:missing-auth-method', code: 'no-auth-method' },
+        {
+          credentialId: 'apikey:missing-auth-method',
+          code: 'unknown-auth-method',
+        },
       ]),
     })
     const refusals = await vaultMenuText(
@@ -379,7 +366,9 @@ test('real vault metadata serves API keys on every host and refuses missing auth
       'refusals',
     )
     expect(refusals).toContain('Rows left to other plugins: 0')
-    expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
+    expect(refusals).toContain(
+      'apikey:missing-auth-method: unknown-auth-method',
+    )
     expect(h.reads).not.toContain('apikey:missing-auth-method')
   }
 })

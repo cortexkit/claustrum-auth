@@ -88,7 +88,12 @@ export function fixtureClient(directory: string): ClaustrumScopedClient {
 }
 const client = fixtureClient(dir)
 
-const table = [...fixtureEntries, ...supportedProviders].map((entry) => ({
+const table = [
+  ...fixtureEntries,
+  ...(process.env.CLAUSTRUM_AUTH_E2E_REAL_ROWS === '1'
+    ? supportedProviders
+    : []),
+].map((entry) => ({
   ...entry,
   origins: [origin],
 }))

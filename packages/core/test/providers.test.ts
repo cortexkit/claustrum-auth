@@ -3,6 +3,7 @@
 // owned request may send the key, and that the published build lists the live
 // providers while the fixtures stay out of it.
 import { expect, test } from 'bun:test'
+import type { VaultRowFacts } from '@cortexkit/common-auth/claustrum'
 import {
   classifyRow,
   createFetch,
@@ -127,10 +128,10 @@ const vaultRows: {
 
 const hosts: Host[] = ['opencode1', 'opencode2', 'pi']
 
-function facts(item: (typeof vaultRows)[number]) {
+function facts(item: (typeof vaultRows)[number]): VaultRowFacts {
   return {
     credentialId: item.credential,
-    credentialType: item.credentialType ?? 'apikey',
+    credentialType: item.credentialType === 'oauth' ? 'oauth' : 'api_key',
     authMethod: item.credentialType === 'oauth' ? 'oauth' : 'apikey',
     categories: item.categories ?? ['llm-provider'],
     providerIds: item.providerIds,
@@ -275,9 +276,9 @@ test('cline-pass is served by its exact credential id only while the row has no 
 })
 
 test('fleet ids map to each host id: fireworks-ai on Pi is fireworks, kimi-code-plan-global is kimi on both hosts', () => {
-  const row = (providerIds: string[]) => ({
+  const row = (providerIds: string[]): VaultRowFacts => ({
     credentialId: 'opaque',
-    credentialType: 'apikey',
+    credentialType: 'api_key',
     authMethod: 'apikey',
     categories: ['llm-provider'],
     providerIds,
@@ -312,7 +313,7 @@ test('a row naming this batch beside another service is refused rather than gues
     classifyRow(
       {
         credentialId: 'opaque',
-        credentialType: 'apikey',
+        credentialType: 'api_key',
         authMethod: 'apikey',
         categories: ['llm-provider'],
         providerIds: ['deepseek', 'openrouter'],
@@ -324,7 +325,7 @@ test('a row naming this batch beside another service is refused rather than gues
     classifyRow(
       {
         credentialId: 'opaque',
-        credentialType: 'apikey',
+        credentialType: 'api_key',
         authMethod: 'apikey',
         categories: ['llm-provider'],
         providerIds: ['deepseek', 'google'],
@@ -339,7 +340,7 @@ test('a live provider is refused on a host whose catalog no longer knows it', ()
     classifyRow(
       {
         credentialId: 'apikey:openrouter',
-        credentialType: 'apikey',
+        credentialType: 'api_key',
         authMethod: 'apikey',
         categories: ['llm-provider'],
         providerIds: ['openrouter'],

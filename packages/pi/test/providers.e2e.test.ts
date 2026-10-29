@@ -177,7 +177,9 @@ describe.skipIf(!e2e)('live providers on the real Pi host', () => {
     const pi = await launch()
     const refusals = await pi.slash('/claustrum refusals')
     expect(refusals).toContain('Rows left to other plugins: 0')
-    expect(refusals).toContain('apikey:missing-auth-method: no-auth-method')
+    expect(refusals).toContain(
+      'apikey:missing-auth-method: unknown-auth-method',
+    )
     for (const item of live) {
       expect([item.pi, await pi.slash(`/claustrum use ${item.pi}`)]).toEqual([
         item.pi,

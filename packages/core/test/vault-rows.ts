@@ -3,7 +3,7 @@ import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 /** Model-provider metadata as list_scoped returns it, not custody's internal type. */
 export function apiKeyRow(
   id: string,
-  providerIds: string[],
+  providerIds: readonly string[],
   extra: Partial<ScopedInventoryRow> = {},
 ): ScopedInventoryRow {
   return {
@@ -23,7 +23,7 @@ export function apiKeyRow(
 
 export function oauthRow(
   id: string,
-  providerIds: string[],
+  providerIds: readonly string[],
   refreshAdapter: string,
   extra: Partial<ScopedInventoryRow> = {},
 ): ScopedInventoryRow {

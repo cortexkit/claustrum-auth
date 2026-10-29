@@ -9,7 +9,7 @@ import { apiKeyRow } from '../../../../core/test/vault-rows.ts'
 
 export interface VaultRow extends Partial<ScopedInventoryRow> {
   readonly id: string
-  readonly providerIds: string[]
+  readonly providerIds: readonly string[]
   /** The account the listing names; undefined for none. */
   readonly accountId?: string
   /** The account `get_scoped` asserts; defaults to the listed one. */
@@ -62,11 +62,12 @@ export function startFakeVault(rows: VaultRow[]): FakeVault {
       if (op === 'list')
         return Response.json({
           result: {
-            rows: vault.rows.map(({ servedAccountId: _, ...row }) =>
-              apiKeyRow(row.id, row.providerIds, {
-                ...row,
-                recordVersion: vault.version,
-              }),
+            rows: vault.rows.map(
+              ({ servedAccountId: _, providerIds, ...row }) =>
+                apiKeyRow(row.id, [...providerIds], {
+                  ...row,
+                  recordVersion: vault.version,
+                }),
             ),
             view: `view-${vault.version}-${vault.rows.map((row) => row.id).join(',')}`,
           },
