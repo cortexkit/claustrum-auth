@@ -239,6 +239,8 @@ export type Model = {
   limit?: { output?: number }
   capabilities?: {
     output?: string[] | { text?: boolean }
+    toolcall?: boolean
+    tools?: boolean
     reasoning?:
       | boolean
       | { supported: boolean; toggle?: boolean; effort?: string[] }
@@ -275,6 +277,21 @@ function reasoningRank(model: Model) {
     : Object.keys(model.variants ?? {}).length
   return reasoning || variants ? 2 : 1
 }
+
+export function smokeTokens(model: Model, host: Host, provider: string) {
+  // A 16-token response can consist entirely of hidden reasoning. Meta's
+  // captured variants lack an off control; Pi model overrides can also hide
+  // Cerebras and Go reasoning metadata.
+  // Leave bounded room for an answer without allowing a continuation request.
+  const variant = smokeVariant(model)
+  return provider === 'meta' ||
+    (host === 'pi' && ['cerebras', 'opencode-go'].includes(provider)) ||
+    (variant !== undefined && variant !== 'none') ||
+    reasoningRank(model) === 2
+    ? 1024
+    : 16
+}
+
 export function cheapest(
   models: Model[],
   host: Host,
@@ -283,6 +300,10 @@ export function cheapest(
 ) {
   if (!models.length) throw new SmokeError(`NoCatalogModels:${host}:${p}`)
   const candidates = models.filter((m) => {
+    // The smoke's OpenCode prompts include tools. Text output alone does not
+    // make an edit-only or media model eligible for those chat requests.
+    if ((m.capabilities?.toolcall ?? m.capabilities?.tools) === false)
+      return false
     const output = m.capabilities?.output
     if (
       output &&
@@ -306,6 +327,11 @@ export function cheapest(
   })
   candidates.sort(
     (a, b) =>
+      // Prefer Pi Zen's small Responses model when offered; the captured gpt-5
+      // turn was rejected with "Model access is disabled".
+      (host === 'pi' && p === 'opencode-zen'
+        ? Number(b.id === 'gpt-5.4-mini') - Number(a.id === 'gpt-5.4-mini')
+        : 0) ||
       reasoningRank(a) - reasoningRank(b) ||
       (a.cost?.input ?? Infinity) +
         (a.cost?.output ?? Infinity) -
@@ -409,7 +435,7 @@ function plan(o: Options) {
                   host === 'opencode2'
                     ? `${bin} auth login ${id} --method claustrum-auth --server <loopback-url>`
                     : `/claustrum use ${id}${host === 'pi' ? ' (RPC consent: true)' : ''}`,
-                  `${host}/${p}: discover catalog, choose cheapest text model with reasoning off where available, set max output 16, restart host, check ownership`,
+                  `${host}/${p}: discover catalog, choose a text/tool model with reasoning off where available, cap output at 16 (1024 for reasoning), restart host, check ownership`,
                   host === 'opencode2'
                     ? `${bin} run --server <loopback-url> --format json --title 'Live smoke' --model ${id}/<cheapest-model> 'Reply with the single word OK.'`
                     : host === 'pi'
@@ -679,6 +705,7 @@ async function piDriver(r: Runner, extension: string): Promise<Driver> {
           id,
           model.id,
           'Reply with the single word OK.',
+          'off',
         )
         if (result.error) throw new SmokeError(errorClass(result.error))
         return result.text
@@ -713,6 +740,15 @@ export function errorClass(text: string) {
     return 'insufficient-validity (vault defect)'
   if (/this model.s driver sends its key in[\s\S]*x-api-key/.test(text))
     return 'LocalUnsupportedAuthHeader'
+  // Pi errorMessage strings include "412: ..." and "xai API error (403): ...".
+  // Match only the status prefix so request identifiers cannot become statuses.
+  const status = text.match(/^(?:[\w-]+ API error \()?([45]\d\d)(?:\))?: /)?.[1]
+  if (status)
+    return status === '429'
+      ? 'Provider429'
+      : status === '401'
+        ? 'Provider401'
+        : `ProviderHTTP${status}`
   if (/401|unauthoriz/i.test(text)) return 'Provider401'
   if (/429|rate.?limit/i.test(text)) return 'Provider429'
   if (/timeout|timed out/i.test(text)) return 'Timeout'
@@ -905,7 +941,13 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
         r.host,
         'turn-budget.json',
       )
-      writeFileSync(budget, '{"status":0}')
+      writeFileSync(
+        budget,
+        JSON.stringify({
+          status: 0,
+          maxOutputTokens: smokeTokens(model, r.host, id),
+        }),
+      )
       if (existsSync(`${budget}.spent`)) unlinkSync(`${budget}.spent`)
       if (v2) {
         if (followup && !turnSession) throw new SmokeError('MissingSessionID')
@@ -1061,6 +1103,7 @@ export type TestHooks = {
   plugin?: Partial<Record<Host, string>>
   env?: Record<string, string>
   config?: Partial<Record<Host, Record<string, unknown>>>
+  models?: (models: Model[]) => Model[]
   skipEnrollment?: boolean
   onError?: (error: unknown) => void
 }
@@ -1160,12 +1203,12 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           path.join(guard, 'index.js'),
           `
           import original from ${JSON.stringify(original)}
-          import {writeFileSync,openSync,closeSync} from 'node:fs'
+          import {writeFileSync,readFileSync,openSync,closeSync} from 'node:fs'
           const budget=${JSON.stringify(budget)}
           export default {...original,server:async(input,options)=>{
             const hooks=await original.server(input,options)
             return {...hooks,
-              'chat.params':async(request,output)=>{await hooks['chat.params']?.(request,output);output.maxOutputTokens=16},
+              'chat.params':async(request,output)=>{await hooks['chat.params']?.(request,output);output.maxOutputTokens=JSON.parse(readFileSync(budget,'utf8')).maxOutputTokens ?? 16},
               config:async(config)=>{
                 await hooks.config?.(config)
                 for(const block of Object.values(config.provider ?? {})) {
@@ -1219,6 +1262,12 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           }),
         )
       } else {
+        const modelsFile = path.join(env.PI_CODING_AGENT_DIR, 'models.json')
+        if (existsSync(modelsFile)) {
+          const config = JSON.parse(readFileSync(modelsFile, 'utf8'))
+          removeLegacyPiCaps(config)
+          writeFileSync(modelsFile, JSON.stringify(config))
+        }
         writeFileSync(
           path.join(env.PI_CODING_AGENT_DIR, 'settings.json'),
           JSON.stringify({
@@ -1283,9 +1332,10 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           )
             throw new SmokeError('ActivationRefused')
           row.activation = 'activated'
-          const models = await driver.models(id)
+          const available = await driver.models(id)
+          const models = hooks.models?.(available) ?? available
           const model = cheapest(models, host, p)
-          capModels(r, id, models)
+          capModels(r, id, p, models)
           await driver.stop()
           driver =
             host === 'pi' ? await piDriver(r, plugin) : await openCodeDriver(r)
@@ -1404,7 +1454,7 @@ export async function main() {
 }
 if (import.meta.main) await main()
 
-function capModels(r: Runner, id: string, models: Model[]) {
+function capModels(r: Runner, id: string, provider: string, models: Model[]) {
   const file =
     r.host === 'pi'
       ? path.join(r.env.PI_CODING_AGENT_DIR, 'models.json')
@@ -1414,21 +1464,49 @@ function capModels(r: Runner, id: string, models: Model[]) {
   config[key] ??= {}
   config[key][id] ??= {}
   if (r.host === 'pi') {
-    const previous = (config[key][id].models ?? []) as { id: string }[]
-    config[key][id].models = models.map((m) => ({
-      ...previous.find((p) => p.id === m.id),
-      id: m.id,
-      maxTokens: 16,
-    }))
+    capPiModels(config[key][id], models, provider)
   } else {
     config[key][id].models ??= {}
     for (const model of models)
       config[key][id].models[model.id] = {
         ...config[key][id].models[model.id],
-        limit: { ...model.limit, output: 16 },
+        limit: { ...model.limit, output: smokeTokens(model, r.host, provider) },
       }
   }
   writeFileSync(file, JSON.stringify(config))
+}
+
+type PiModelConfig = {
+  models?: { id: string; [key: string]: unknown }[]
+  modelOverrides?: Record<string, Record<string, unknown>>
+}
+
+export function removeLegacyPiCaps(config: {
+  providers?: Record<string, PiModelConfig>
+}) {
+  // Pi treats id/maxTokens-only entries as full custom definitions and supplies
+  // defaults that hide catalog prices and reasoning controls. The former cap
+  // writer generated that shape; retain definitions with any additional fields.
+  for (const provider of Object.values(config.providers ?? {}))
+    if (provider.models)
+      provider.models = provider.models.filter(
+        (m) =>
+          !(typeof m.maxTokens === 'number' && Object.keys(m).length === 2),
+      )
+}
+
+export function capPiModels(
+  config: PiModelConfig,
+  models: Model[],
+  provider: string,
+) {
+  // An override changes the cap without replacing Pi's catalog model metadata.
+  config.modelOverrides ??= {}
+  for (const model of models)
+    config.modelOverrides[model.id] = {
+      ...config.modelOverrides[model.id],
+      maxTokens: smokeTokens(model, 'pi', provider),
+    }
 }
 
 type V1Provider = {

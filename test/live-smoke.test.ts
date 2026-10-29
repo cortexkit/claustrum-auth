@@ -7,6 +7,7 @@ import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { PiRpc } from '../packages/pi/test/rpc.ts'
 import {
+  capPiModels,
   cheapest,
   confined,
   environment,
@@ -15,9 +16,11 @@ import {
   matrix,
   options,
   preview,
+  removeLegacyPiCaps,
   runSmoke,
   safe,
   served,
+  smokeTokens,
   smokeVariant,
   table,
   v1Models,
@@ -150,6 +153,144 @@ describe('live smoke safety', () => {
       expect(() => cheapest([], host, 'typesafe')).toThrow(
         `NoCatalogModels:${host}:typesafe`,
       )
+  })
+  test('smoke rejects text models that cannot serve the coding hosts tools', () => {
+    for (const host of ['opencode1', 'opencode2'] as const) {
+      for (const provider of ['inception', 'openrouter']) {
+        expect(
+          cheapest(
+            [
+              {
+                id: 'edit-or-audio',
+                capabilities: {
+                  output: { text: true },
+                  ...(host === 'opencode1'
+                    ? { toolcall: false }
+                    : { tools: false }),
+                  reasoning: false,
+                },
+                cost: { input: 0, output: 0 },
+              },
+              {
+                id: 'chat',
+                capabilities: {
+                  output: { text: true },
+                  ...(host === 'opencode1'
+                    ? { toolcall: true }
+                    : { tools: true }),
+                },
+                cost: { input: 1, output: 1 },
+              },
+            ],
+            host,
+            provider,
+          ).id,
+        ).toBe('chat')
+      }
+    }
+  })
+  test('smoke leaves bounded answer room when reasoning cannot be disabled', () => {
+    for (const host of ['opencode1', 'opencode2', 'pi'] as const) {
+      expect(smokeTokens({ id: 'm', reasoning: true }, host, 'meta')).toBe(1024)
+      expect(smokeTokens({ id: 'm', reasoning: true }, host, 'inception')).toBe(
+        1024,
+      )
+      expect(
+        smokeTokens({ id: 'm', variants: { none: {} } }, host, 'deepseek'),
+      ).toBe(16)
+      expect(
+        smokeTokens(
+          {
+            id: 'm',
+            capabilities: { reasoning: false },
+            variants: { high: {} },
+          },
+          host,
+          'cerebras',
+        ),
+      ).toBe(1024)
+    }
+    for (const provider of ['cerebras', 'opencode-go'])
+      expect(smokeTokens({ id: 'm', reasoning: false }, 'pi', provider)).toBe(
+        1024,
+      )
+  })
+  test('Pi caps use overrides rather than replacing catalog reasoning and prices', () => {
+    const config: { modelOverrides: Record<string, Record<string, unknown>> } =
+      {
+        modelOverrides: { m: { reasoning: true, contextWindow: 8000 } },
+      }
+    capPiModels(config, [{ id: 'm', reasoning: true }], 'meta')
+    expect(config).toEqual({
+      modelOverrides: {
+        m: { reasoning: true, contextWindow: 8000, maxTokens: 1024 },
+      },
+    })
+    const builtin = {}
+    capPiModels(builtin, [{ id: 'catalog' }], 'deepseek')
+    expect(builtin).toEqual({ modelOverrides: { catalog: { maxTokens: 16 } } })
+  })
+  test('Pi removes only legacy smoke cap definitions before catalog discovery', () => {
+    const config = {
+      providers: {
+        cerebras: {
+          models: [
+            { id: 'old', maxTokens: 16 },
+            { id: 'custom', name: 'Custom', reasoning: true },
+          ],
+          modelOverrides: { custom: { maxTokens: 32 } },
+        },
+      },
+    }
+    removeLegacyPiCaps(config)
+    expect(config.providers.cerebras.models).toEqual([
+      { id: 'custom', name: 'Custom', reasoning: true },
+    ])
+    expect(config.providers.cerebras.modelOverrides).toEqual({
+      custom: { maxTokens: 32 },
+    })
+  })
+  test('Pi Zen prefers the offered small Responses model over disabled legacy gpt-5', () => {
+    expect(
+      cheapest(
+        [
+          {
+            id: 'gpt-5',
+            api: 'openai-responses',
+            cost: { input: 0, output: 0 },
+          },
+          {
+            id: 'gpt-5.4-mini',
+            api: 'openai-responses',
+            cost: { input: 1, output: 1 },
+          },
+        ],
+        'pi',
+        'opencode-zen',
+      ).id,
+    ).toBe('gpt-5.4-mini')
+    expect(
+      cheapest([{ id: 'other', api: 'openai-responses' }], 'pi', 'opencode-zen')
+        .id,
+    ).toBe('other')
+  })
+  test('Pi provider status prefixes survive decoding without inspecting identifiers', () => {
+    expect(errorClass('412: {"message":"Account suspended"}')).toBe(
+      'ProviderHTTP412',
+    )
+    expect(errorClass('xai API error (403): 403 "No credits"')).toBe(
+      'ProviderHTTP403',
+    )
+    expect(
+      errorClass(
+        'opencode API error (403): {"message":"Model access is disabled"}',
+      ),
+    ).toBe('ProviderHTTP403')
+    expect(errorClass('400: {"message":"bad model"}')).toBe('ProviderHTTP400')
+    expect(errorClass('403: {"message":"request 429abc401"}')).toBe(
+      'ProviderHTTP403',
+    )
+    expect(errorClass('request 412abc403')).toBe('HostError')
   })
   test('OpenCode 2 error events preserve provider status and output-limit provenance', () => {
     for (const status of [400, 402, 403, 412, 429]) {
@@ -304,6 +445,40 @@ describe('live smoke safety', () => {
     expect(Buffer.concat(raw)).toEqual(bytes)
     child.emit('exit', 0)
     await rpc.exited
+  })
+  test('Pi smoke turns apply thinking off after model selection', async () => {
+    class Child extends EventEmitter {
+      stdout = new PassThrough()
+      stderr = new PassThrough()
+      stdin = new PassThrough()
+      exitCode = null
+      signalCode = null
+    }
+    const child = new Child()
+    const rpc = new PiRpc(child as unknown as ChildProcess, true)
+    const commands: string[] = []
+    child.stdin.on('data', (bytes) => {
+      const command = JSON.parse(bytes.toString())
+      commands.push(command.type)
+      child.stdout.write(
+        `${JSON.stringify({ type: 'response', id: command.id, success: true })}\n`,
+      )
+      if (command.type === 'prompt') {
+        child.stdout.write(
+          `${JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'OK' }] } })}\n`,
+        )
+        child.stdout.write('{"type":"agent_settled"}\n')
+      }
+    })
+    try {
+      expect((await rpc.turn('cerebras', 'm', 'Reply OK', 'off')).text).toBe(
+        'OK',
+      )
+      expect(commands).toEqual(['set_model', 'set_thinking_level', 'prompt'])
+    } finally {
+      child.emit('exit', 0)
+      await rpc.exited
+    }
   })
   test('OAuth-shaped access fields are authorization contexts', () => {
     expect(

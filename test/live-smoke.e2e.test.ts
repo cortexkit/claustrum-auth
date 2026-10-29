@@ -34,26 +34,41 @@ describe.skipIf(!enabled)(
       for (const rejected of [
         false,
         true,
+        'reasoning',
         ...(host === 'opencode2' ? ['length'] : []),
       ])
-        test(`${host}${rejected === 'length' ? ' output-limit continuation budget' : rejected ? ' provider 429' : ''}`, async () => {
+        test(`${host}${rejected === 'reasoning' ? ' reasoning answer budget' : rejected === 'length' ? ' output-limit continuation budget' : rejected ? ' provider 429' : ''}`, async () => {
+          const reasoning = rejected === 'reasoning'
+          const failed = Boolean(rejected) && !reasoning
           const base = path.resolve('target/scratch/live-smoke-e2e')
           mkdirSync(base, { recursive: true })
           const root = mkdtempSync(path.join(base, `${host}-`))
           const home = path.join(root, 'home')
           mkdirSync(home, { recursive: true })
           const mock = await startMock()
-          mock.reply = () =>
-            rejected === 'length'
+          mock.reply = (request) => {
+            const payload = JSON.parse(request.body)
+            if (reasoning)
+              console.log('fake reasoning request', {
+                host,
+                model: payload.model,
+                cap: payload.max_tokens ?? payload.max_completion_tokens,
+                effort: payload.reasoning_effort,
+              })
+            return rejected === 'length'
               ? { kind: 'ok', text: '', finish: 'length' }
-              : rejected
-                ? {
-                    kind: 'status',
-                    status: 429,
-                    headers: { 'retry-after': '0' },
-                    body: '{"error":{"message":"rate limit","type":"rate_limit_error"}}',
-                  }
-                : { kind: 'ok', text: 'OK' }
+              : reasoning &&
+                  (payload.max_tokens ?? payload.max_completion_tokens) < 128
+                ? { kind: 'ok', text: '', finish: 'length' }
+                : failed
+                  ? {
+                      kind: 'status',
+                      status: 429,
+                      headers: { 'retry-after': '0' },
+                      body: '{"error":{"message":"rate limit","type":"rate_limit_error"}}',
+                    }
+                  : { kind: 'ok', text: 'OK' }
+          }
           try {
             const fake = path.join(home, 'fake')
             mkdirSync(fake)
@@ -195,6 +210,8 @@ describe.skipIf(!enabled)(
                           name: 'm',
                           contextWindow: 8000,
                           maxTokens: 4096,
+                          reasoning: true,
+                          thinkingLevelMap: { off: 'none' },
                           cost: {
                             input: 0,
                             output: 0,
@@ -226,13 +243,19 @@ describe.skipIf(!enabled)(
                             settings: { reasoningEffort: 'high' },
                             variants: [
                               {
-                                id: 'high',
-                                settings: { reasoningEffort: 'high' },
+                                id: reasoning ? 'low' : 'high',
+                                settings: {
+                                  reasoningEffort: reasoning ? 'low' : 'high',
+                                },
                               },
-                              {
-                                id: 'none',
-                                settings: { reasoningEffort: 'none' },
-                              },
+                              ...(!reasoning
+                                ? [
+                                    {
+                                      id: 'none',
+                                      settings: { reasoningEffort: 'none' },
+                                    },
+                                  ]
+                                : []),
                             ],
                           },
                         },
@@ -251,7 +274,9 @@ describe.skipIf(!enabled)(
                             options: { reasoningEffort: 'high' },
                             variants: {
                               high: { reasoningEffort: 'high' },
-                              none: { reasoningEffort: 'none' },
+                              ...(!reasoning
+                                ? { none: { reasoningEffort: 'none' } }
+                                : {}),
                             },
                           },
                         },
@@ -269,6 +294,11 @@ describe.skipIf(!enabled)(
               {
                 onError: (error) =>
                   console.error('private fake error:', safe(String(error))),
+                // The budget fixture must exercise its reasoning model, not a
+                // non-reasoning model preferred by the host-catalog ranking.
+                models: reasoning
+                  ? (models) => models.filter((m) => m.id === 'm')
+                  : undefined,
                 binary: binaries,
                 plugin: {
                   [host]:
@@ -290,8 +320,13 @@ describe.skipIf(!enabled)(
               '.cortexkit/internal-docs/investigations',
             )
             mkdirSync(evidence, { recursive: true })
-            const suffix =
-              rejected === 'length' ? '-length' : rejected ? '-429' : ''
+            const suffix = reasoning
+              ? '-reasoning'
+              : rejected === 'length'
+                ? '-length'
+                : rejected
+                  ? '-429'
+                  : ''
             writeFileSync(
               path.join(evidence, `live-smoke-${host}${suffix}.md`),
               report,
@@ -313,7 +348,7 @@ describe.skipIf(!enabled)(
             )
             expect(row.status).toStartWith('served:')
             expect(row.activation).toBe('activated')
-            if (rejected) {
+            if (failed) {
               expect(row.turn).not.toStartWith('OK')
               expect(row.turn).not.toBe('not attempted')
               expect(row.turn).not.toBe('Timeout')
@@ -328,17 +363,31 @@ describe.skipIf(!enabled)(
               'Bearer fake-vault-cerebras-value',
             )
             const body = JSON.parse(turns[0].body)
-            expect(body.max_tokens ?? body.max_completion_tokens).toBe(16)
+            expect(body.max_tokens ?? body.max_completion_tokens).toBe(
+              host === 'pi' || reasoning ? 1024 : 16,
+            )
             expect(body.model).toBe('m')
-            if (host !== 'pi') {
+            if (host === 'pi') {
               expect(body.reasoning_effort).toBe('none')
+              const saved = JSON.parse(
+                readFileSync(
+                  path.join(env.PI_CODING_AGENT_DIR, 'models.json'),
+                  'utf8',
+                ),
+              )
+              expect(saved.providers.cerebras.modelOverrides.m.maxTokens).toBe(
+                1024,
+              )
+              expect(saved.providers.cerebras.models[0].maxTokens).toBe(4096)
+            } else {
+              expect(body.reasoning_effort).toBe(reasoning ? 'low' : 'none')
               const saved = JSON.parse(
                 readFileSync(env.OPENCODE_CONFIG, 'utf8'),
               )
               expect(
                 saved[host === 'opencode1' ? 'provider' : 'providers'].cerebras
                   .models.m.limit.output,
-              ).toBe(16)
+              ).toBe(reasoning ? 1024 : 16)
               if (host === 'opencode1') {
                 const initial = JSON.parse(
                   readFileSync(path.join(logs, 'api-1.json'), 'utf8'),
@@ -349,7 +398,7 @@ describe.skipIf(!enabled)(
               }
             }
             expect(report).not.toContain('fake-vault-cerebras-value')
-            expect(row.passed).toBe(!rejected)
+            expect(row.passed).toBe(!failed)
             expect(report).not.toContain('fake-own-key')
             if (host === 'pi') {
               expect(

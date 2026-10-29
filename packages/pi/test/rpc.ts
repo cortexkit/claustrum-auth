@@ -125,8 +125,17 @@ export class PiRpc {
   }
 
   /** Select a model, send one prompt and return the assistant's last message. */
-  async turn(providerId: string, modelId: string, message = 'hello') {
+  async turn(
+    providerId: string,
+    modelId: string,
+    message = 'hello',
+    thinkingLevel?: 'off',
+  ) {
     await this.command({ type: 'set_model', provider: providerId, modelId })
+    // Model selection can restore a saved thinking level. Apply an explicit
+    // turn override after selecting the model, before any prompt is sent.
+    if (thinkingLevel)
+      await this.command({ type: 'set_thinking_level', level: thinkingLevel })
     const from = this.records.length
     await this.command({ type: 'prompt', message })
     await this.waitFor((record) => record.type === 'agent_settled', from)

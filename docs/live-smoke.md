@@ -17,12 +17,24 @@ shared driver is tracked at `scripts/live-smoke/run.ts` and can also be run
 directly with the same arguments.
 
 For each served row with an eligible catalog model, the headless driver attempts
-at most one provider request, with a 16-token output cap. It excludes non-text
-models, prefers an advertised reasoning-off variant
+at most one provider request, with a 16-token output cap for non-reasoning
+models. Models without a reasoning-off control get 1024 tokens so hidden
+reasoning does not consume the entire answer budget. Meta always gets that
+budget, as do Cerebras and Go on Pi: the 2026-10-29 operator captures
+(`pi/child-5.stdout:16`, `pi/child-12.stdout:16`) returned only thinking at
+16 tokens despite advertising no reasoning. It excludes non-text and
+explicitly non-tool-capable models, prefers an advertised reasoning-off variant
 or a non-reasoning model, and otherwise selects the lowest advertised effort.
 Within those groups it chooses the lowest catalog input-plus-output price.
+Pi's Zen smoke prefers `gpt-5.4-mini` when offered, rather than the legacy
+`gpt-5` entry that returned “Model access is disabled” in the 2026-10-29
+operator capture (`pi/child-13.stdout:13`).
+Pi caps use `modelOverrides`, not replacement model definitions, so prices,
+reasoning flags and thinking-level maps survive. The driver removes only old
+smoke-generated `id`/`maxTokens` definitions before discovering the catalog.
 OpenCode 2 selects variants with `provider/model#variant`; OpenCode 1 uses the
-message's `variant` field, and Pi uses thinking level `off`. The guards block
+message's `variant` field, and Pi sets thinking level `off` after selecting
+the model so a saved per-model level cannot override it. The guards block
 both retries and automatic output-limit continuations before another physical
 send. If the first response is still truncated, `RequestBudgetExhausted` is a
 driver-budget failure, not an account refusal; it is not retried. The second
