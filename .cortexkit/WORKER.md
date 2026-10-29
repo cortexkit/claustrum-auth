@@ -1,6 +1,6 @@
 # Standing rules for workers
 
-Standing rules for workers. Anything not listed here comes to the head (Alfonso) as a question.
+Standing rules for workers. Anything not listed here comes to the head (OAIAUTH) as a question.
 
 ## Build and test
 - Run builds and test suites on the build server through the AFT `bash` tool's `runon` parameter. Use `runon: "linux,16c,net"` for the full gate and `runon: "linux,4c"` for one package: `16c`/`4c` allocate CPU cores and `,net` enables network access for installs. Run on the Mac only what needs macOS, or what the build server can't install (an unpublished candidate tarball). In that case run one suite at a time.
