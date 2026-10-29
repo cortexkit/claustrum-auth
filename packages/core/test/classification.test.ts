@@ -110,7 +110,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
                 'fireworks-ai': 'fireworks',
                 'kimi-code-plan-global': 'kimi-coding',
               }[id]
-            : { 'kimi-code-plan-global': 'kimi-for-coding' }[id]
+            : { 'kimi-code-plan-global': 'kimi-code-plan-global' }[id]
         return { kind: 'mine', member: member ?? id }
       },
     })
@@ -141,9 +141,9 @@ test('classification maps fleet ids to each host id and refuses host ids and unk
     })
     expect(run(['kimi-code-plan-global'], host)).toEqual({
       kind: 'mine',
-      member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
+      member: host === 'pi' ? 'kimi-coding' : 'kimi-code-plan-global',
     })
-    // A host's own id is not a fleet id.
+    // Pi-only ids and the retired OpenCode Kimi id are not fleet ids.
     for (const hostId of ['fireworks', 'kimi-for-coding', 'kimi-coding'])
       expect(run([hostId], host)).toEqual({
         kind: 'refused',

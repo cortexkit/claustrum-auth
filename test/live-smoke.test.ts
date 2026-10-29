@@ -10,6 +10,7 @@ import {
   cheapest,
   confined,
   environment,
+  errorClass,
   leaks,
   matrix,
   options,
@@ -17,6 +18,7 @@ import {
   runSmoke,
   safe,
   served,
+  smokeVariant,
   table,
   v1Models,
 } from '../scripts/live-smoke/run.ts'
@@ -108,6 +110,79 @@ describe('live smoke safety', () => {
       ).id,
     ).toBe('glm-5.3')
   })
+  test('smoke selects text and a reasoning-off model before comparing prices', () => {
+    for (const host of ['opencode1', 'opencode2'] as const) {
+      const models = [
+        {
+          id: 'image',
+          cost: { input: 0, output: 0 },
+          capabilities: { output: ['image'] },
+        },
+        {
+          id: 'always-thinking',
+          cost: { input: 0, output: 0 },
+          variants: [{ id: 'low' }],
+        },
+        {
+          id: 'off',
+          cost: { input: 1, output: 1 },
+          variants: [{ id: 'none' }, { id: 'low' }],
+          capabilities: { output: { text: true } },
+        },
+      ]
+      expect(cheapest(models, host, 'xai').id).toBe('off')
+    }
+    expect(
+      smokeVariant({ id: 'm', variants: { high: {}, low: {}, none: {} } }),
+    ).toBe('none')
+    expect(
+      smokeVariant({
+        id: 'm',
+        variants: [{ id: 'high' }, { id: 'minimal' }, { id: 'low' }],
+      }),
+    ).toBe('minimal')
+    expect(smokeVariant({ id: 'm', variants: { high: {}, medium: {} } })).toBe(
+      'medium',
+    )
+  })
+  test('an absent Typesafe catalog is not misreported as a bearer transport failure', () => {
+    for (const host of ['opencode1', 'opencode2'] as const)
+      expect(() => cheapest([], host, 'typesafe')).toThrow(
+        `NoCatalogModels:${host}:typesafe`,
+      )
+  })
+  test('OpenCode 2 error events preserve provider status and output-limit provenance', () => {
+    for (const status of [400, 402, 403, 412, 429]) {
+      expect(
+        errorClass(
+          JSON.stringify({
+            type: 'error',
+            error: { type: 'provider.auth', status, message: 'redacted' },
+          }),
+        ),
+      ).toBe(status === 429 ? 'Provider429' : `ProviderHTTP${status}`)
+    }
+    expect(
+      errorClass(
+        JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'output-limit',
+            message:
+              'Response still truncated after two output token limit continuations',
+          },
+        }),
+      ),
+    ).toBe('OutputTokenLimit')
+    expect(
+      errorClass(
+        JSON.stringify({
+          type: 'error',
+          error: { type: 'unknown', message: 'request 429abc401' },
+        }),
+      ),
+    ).toBe('HostError')
+  })
   test('v1 model package overrides, not model names or API URLs, select transport', () => {
     const models = v1Models({
       id: 'opencode-go',
@@ -127,6 +202,23 @@ describe('live smoke safety', () => {
     expect(cheapest(models, 'opencode1', 'opencode-go').id).toBe(
       'claude-proxied',
     )
+    expect(cheapest(models, 'opencode1', 'opencode-go', true).id).toBe('opaque')
+  })
+  test('v1 runtime catalog api.npm identifies the actual model transport', () => {
+    const models = v1Models({
+      id: 'opencode-go',
+      models: {
+        opaque: {
+          api: { npm: '@ai-sdk/anthropic' },
+          cost: { input: 0, output: 0 },
+        },
+        text: {
+          api: { npm: '@ai-sdk/openai-compatible' },
+          cost: { input: 1, output: 1 },
+        },
+      },
+    })
+    expect(cheapest(models, 'opencode1', 'opencode-go').id).toBe('text')
     expect(cheapest(models, 'opencode1', 'opencode-go', true).id).toBe('opaque')
   })
   test('dry plan executes nothing and leaves the scratch home untouched', async () => {

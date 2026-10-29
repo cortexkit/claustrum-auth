@@ -75,7 +75,7 @@ const vaultRows: {
     providerIds: ['kimi-code-plan-global'],
     expected: (host) => ({
       kind: 'mine',
-      member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
+      member: host === 'pi' ? 'kimi-coding' : 'kimi-code-plan-global',
     }),
   },
   {
@@ -180,7 +180,7 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     deepseek: 'deepseek',
     fireworks: 'fireworks-ai',
     inception: 'inception',
-    'kimi-coding': 'kimi-for-coding',
+    'kimi-coding': 'kimi-code-plan-global',
     openrouter: 'openrouter',
     typesafe: 'typesafe',
     meta: 'meta',
@@ -217,7 +217,7 @@ test('each shipped origin is the provider API host, and no other host of it is a
     deepseek: ['https://api.deepseek.com'],
     fireworks: ['https://api.fireworks.ai'],
     inception: ['https://api.inceptionlabs.ai'],
-    'kimi-coding': ['https://api.kimi.com'],
+    'kimi-coding': ['https://api.kimi.com', 'https://api.kimi.ai'],
     openrouter: ['https://openrouter.ai'],
     typesafe: ['https://api.typesafe.ai'],
     meta: ['https://api.meta.ai'],
@@ -291,7 +291,7 @@ test('fleet ids map to each host id: fireworks-ai on Pi is fireworks, kimi-code-
     })
     expect(classifyRow(row(['kimi-code-plan-global']), facts)).toEqual({
       kind: 'mine',
-      member: host === 'pi' ? 'kimi-coding' : 'kimi-for-coding',
+      member: host === 'pi' ? 'kimi-coding' : 'kimi-code-plan-global',
     })
     // A fleet id the table has no mapping for is refused, never guessed.
     expect(classifyRow(row(['kimi-code-plan-cn']), facts)).toEqual({
@@ -348,6 +348,69 @@ test('a live provider is refused on a host whose catalog no longer knows it', ()
       publishedFacts('opencode2', ['deepseek']),
     ),
   ).toEqual({ kind: 'refused', code: 'unknown-to-host' })
+})
+
+test('Kimi global plan is served under the catalog id, not the retired provider id', () => {
+  for (const host of ['opencode1', 'opencode2'] as const)
+    expect(
+      classifyRow(
+        {
+          credentialId: 'apikey:kimi-for-coding',
+          credentialType: 'api_key',
+          authMethod: 'apikey',
+          categories: ['llm-provider'],
+          providerIds: ['kimi-code-plan-global'],
+        },
+        publishedFacts(host, ['kimi-code-plan-global']),
+      ),
+    ).toEqual({
+      kind: 'mine',
+      member: 'kimi-code-plan-global',
+    })
+})
+
+test('Kimi serves both documented regions but refuses origin and path lookalikes before reading the vault', async () => {
+  const h = await liveHarness([
+    row('kimi', { providerIds: ['kimi-code-plan-global'] }),
+  ])
+  const entry = tableByService.get('kimi-coding')
+  const consumer = h.consumers.get('kimi-code-plan-global')
+  if (!entry || !consumer) throw new Error('missing Kimi global-plan member')
+  const sent: string[] = []
+  const fetch = createFetch({
+    entry,
+    consumer,
+    placeholder,
+    fetch: async (input) => {
+      const request = input as Request
+      expect(request.headers.get('authorization')).toBe(
+        `Bearer ${h.secretOf('kimi')}`,
+      )
+      sent.push(request.url)
+      return new Response('OK')
+    },
+  })
+  for (const origin of ['https://api.kimi.com', 'https://api.kimi.ai'])
+    expect(
+      await (
+        await fetch(`${origin}/coding/v1/chat/completions`, { headers: bearer })
+      ).text(),
+    ).toBe('OK')
+  const reads = h.reads.length
+  for (const url of [
+    'https://api.kimi.ai.example/coding/v1/chat/completions',
+    'https://kimi.ai/coding/v1/chat/completions',
+    'https://other.kimi.ai/coding/v1/chat/completions',
+    'https://api.kimi.ai:8443/coding/v1/chat/completions',
+    'http://api.kimi.ai/coding/v1/chat/completions',
+    'https://example.com/https://api.kimi.ai/coding/v1/chat/completions',
+    'https://api.kimi.ai@example.com/coding/v1/chat/completions',
+  ])
+    await expect(fetch(url, { headers: bearer })).rejects.toMatchObject({
+      code: 'origin-refused',
+    })
+  expect(h.reads).toHaveLength(reads)
+  expect(sent).toHaveLength(2)
 })
 
 test('the catalog a test host is given holds both the live and the fixture providers', () => {

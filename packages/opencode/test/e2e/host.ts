@@ -129,7 +129,7 @@ export interface Recorded {
   title: boolean
 }
 export type Reply =
-  | { kind: 'ok'; text?: string }
+  | { kind: 'ok'; text?: string; finish?: 'length' }
   | {
       kind: 'status'
       status: number
@@ -157,7 +157,12 @@ function chunk(delta: object, finish: string | null = null) {
   }
 }
 
-function sendOk(res: ServerResponse, stream: boolean, text: string) {
+function sendOk(
+  res: ServerResponse,
+  stream: boolean,
+  text: string,
+  finish = 'stop',
+) {
   if (!stream) {
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(
@@ -170,7 +175,7 @@ function sendOk(res: ServerResponse, stream: boolean, text: string) {
           {
             index: 0,
             message: { role: 'assistant', content: text },
-            finish_reason: 'stop',
+            finish_reason: finish,
           },
         ],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
@@ -184,7 +189,7 @@ function sendOk(res: ServerResponse, stream: boolean, text: string) {
   )
   res.write(
     `data: ${JSON.stringify({
-      ...chunk({}, 'stop'),
+      ...chunk({}, finish),
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     })}\n\n`,
   )
@@ -224,7 +229,12 @@ export async function startMock(): Promise<Mock> {
       const reply = mock.reply(recorded)
       switch (reply.kind) {
         case 'ok':
-          return sendOk(res, stream, reply.text ?? 'hello from the mock')
+          return sendOk(
+            res,
+            stream,
+            reply.text ?? 'hello from the mock',
+            reply.finish,
+          )
         case 'status':
           res.writeHead(reply.status, {
             'content-type': 'application/json',

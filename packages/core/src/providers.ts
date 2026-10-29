@@ -100,17 +100,17 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.inceptionlabs.ai'],
   },
   {
-    // The fleet id is `kimi-code-plan-global`; OpenCode's id is
-    // `kimi-for-coding` and Pi's is `kimi-coding`.
+    // OpenCode's catalog uses the fleet's global-plan id; Pi calls the same
+    // service `kimi-coding`. Both documented regional API origins are exact.
     service: 'kimi-coding',
     ids: ['kimi-code-plan-global'],
     hosts: {
-      opencode1: 'kimi-for-coding',
-      opencode2: 'kimi-for-coding',
+      opencode1: 'kimi-code-plan-global',
+      opencode2: 'kimi-code-plan-global',
       pi: 'kimi-coding',
     },
     class: 'A',
-    origins: ['https://api.kimi.com'],
+    origins: ['https://api.kimi.com', 'https://api.kimi.ai'],
   },
   {
     service: 'openrouter',

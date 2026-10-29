@@ -48,7 +48,7 @@ export function providerID(host: Host, p: string) {
     : host !== 'pi' && p === 'fireworks'
       ? 'fireworks-ai'
       : host !== 'pi' && p === 'kimi-coding'
-        ? 'kimi-for-coding'
+        ? 'kimi-code-plan-global'
         : p
 }
 
@@ -237,6 +237,43 @@ export type Model = {
   api?: string
   cost?: { input?: number; output?: number }
   limit?: { output?: number }
+  capabilities?: {
+    output?: string[] | { text?: boolean }
+    reasoning?:
+      | boolean
+      | { supported: boolean; toggle?: boolean; effort?: string[] }
+  }
+  reasoning?: boolean
+  variants?: Record<string, Record<string, unknown>> | { id: string }[]
+}
+
+export function smokeVariant(model: Model): string | undefined {
+  const variants = Array.isArray(model.variants)
+    ? model.variants.map((v) => v.id)
+    : Object.keys(model.variants ?? {})
+  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].find(
+    (v) => variants.includes(v),
+  )
+}
+
+function reasoningRank(model: Model) {
+  // Some host catalogs expose reasoning controls only as variants. Prefer an
+  // explicit off control to guessing that a model without variants is cheap.
+  const reasoning = model.capabilities?.reasoning ?? model.reasoning
+  if (
+    reasoning === false ||
+    (typeof reasoning === 'object' && !reasoning.supported)
+  )
+    return 0
+  if (
+    smokeVariant(model) === 'none' ||
+    (typeof reasoning === 'object' && reasoning.toggle)
+  )
+    return 0
+  const variants = Array.isArray(model.variants)
+    ? model.variants.length
+    : Object.keys(model.variants ?? {}).length
+  return reasoning || variants ? 2 : 1
 }
 export function cheapest(
   models: Model[],
@@ -244,7 +281,14 @@ export function cheapest(
   p: string,
   anthropic = false,
 ) {
+  if (!models.length) throw new SmokeError(`NoCatalogModels:${host}:${p}`)
   const candidates = models.filter((m) => {
+    const output = m.capabilities?.output
+    if (
+      output &&
+      !(Array.isArray(output) ? output.includes('text') : output.text)
+    )
+      return false
     const isAnthropic = m.api ? /anthropic/.test(m.api) : /claude/.test(m.id)
     if (
       !anthropic &&
@@ -262,6 +306,7 @@ export function cheapest(
   })
   candidates.sort(
     (a, b) =>
+      reasoningRank(a) - reasoningRank(b) ||
       (a.cost?.input ?? Infinity) +
         (a.cost?.output ?? Infinity) -
         ((b.cost?.input ?? Infinity) + (b.cost?.output ?? Infinity)) ||
@@ -364,20 +409,12 @@ function plan(o: Options) {
                   host === 'opencode2'
                     ? `${bin} auth login ${id} --method claustrum-auth --server <loopback-url>`
                     : `/claustrum use ${id}${host === 'pi' ? ' (RPC consent: true)' : ''}`,
-                  `${host}/${p}: discover catalog, choose lowest input+output price, set max output 1, restart host, check ownership`,
+                  `${host}/${p}: discover catalog, choose cheapest text model with reasoning off where available, set max output 16, restart host, check ownership`,
                   host === 'opencode2'
                     ? `${bin} run --server <loopback-url> --format json --title 'Live smoke' --model ${id}/<cheapest-model> 'Reply with the single word OK.'`
                     : host === 'pi'
                       ? `RPC set_model ${id}/<cheapest-model>; prompt 'Reply with the single word OK.'`
                       : `HTTP POST /session/<session-id>/message model=${id}/<cheapest-model> text='Reply with the single word OK.'`,
-                  ...(host === 'opencode2' && p === 'xai'
-                    ? [
-                        `${bin} run --server <loopback-url> --session <first-session-id> --format json --model ${id}/<same-model> 'Reply with the single word OK.'; record WebSocket/HTTP fallback`,
-                      ]
-                    : []),
-                  ...(host !== 'pi' && p === 'opencode-go'
-                    ? ['one Anthropic-shaped model refusal probe']
-                    : []),
                   host === 'opencode2'
                     ? `${bin} auth logout ${id} <activated-credential-id> --server <loopback-url>`
                     : `/claustrum accounts; /claustrum release ${id}`,
@@ -392,6 +429,7 @@ function plan(o: Options) {
 
 class Runner {
   private next = 0
+  apiSequence = 0
   httpFallback = false
   readonly vaultIDs = new Map<string, string>()
   readonly children: ChildProcess[] = []
@@ -655,7 +693,22 @@ async function piDriver(r: Runner, extension: string): Promise<Driver> {
     },
   }
 }
-function errorClass(text: string) {
+export function errorClass(text: string) {
+  for (const line of text.split('\n')) {
+    try {
+      const event = JSON.parse(line)
+      if (event.type !== 'error') continue
+      const status = event.error?.status
+      if (Number.isInteger(status) && status >= 400 && status <= 599)
+        return status === 429
+          ? 'Provider429'
+          : status === 401
+            ? 'Provider401'
+            : `ProviderHTTP${status}`
+      if (event.error?.type === 'output-limit') return 'OutputTokenLimit'
+      return 'HostError'
+    } catch {}
+  }
   if (/insufficient-validity/.test(text))
     return 'insufficient-validity (vault defect)'
   if (/this model.s driver sends its key in[\s\S]*x-api-key/.test(text))
@@ -688,7 +741,6 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
     '--log-level',
     r.host === 'opencode1' ? 'DEBUG' : 'debug',
   ])
-  let apiSequence = 0
   const api = async (
     method: string,
     route: string,
@@ -709,7 +761,7 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
     })
     const raw = Buffer.from(await response.arrayBuffer())
     writeFileSync(
-      path.join(r.o.home, '.live-smoke', r.host, `api-${++apiSequence}.json`),
+      path.join(r.o.home, '.live-smoke', r.host, `api-${++r.apiSequence}.json`),
       raw,
     )
     // The v1 command hook deliberately returns 500 after its synthetic notice
@@ -845,6 +897,16 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
     async turn(id, model, followup = false) {
       if (readFileSync(ready, 'utf8') !== '1')
         throw new SmokeError('RetryGuardNotReady')
+      // Bound physical sends, including output-limit continuations, not just
+      // retries. A fresh host starts with a spent marker to block stray calls.
+      const budget = path.join(
+        r.o.home,
+        '.live-smoke',
+        r.host,
+        'turn-budget.json',
+      )
+      writeFileSync(budget, '{"status":0}')
+      if (existsSync(`${budget}.spent`)) unlinkSync(`${budget}.spent`)
       if (v2) {
         if (followup && !turnSession) throw new SmokeError('MissingSessionID')
         const result = await r.run([
@@ -858,7 +920,7 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
           '--format',
           'json',
           '--model',
-          `${id}/${model.id}`,
+          `${id}/${model.id}${smokeVariant(model) ? `#${smokeVariant(model)}` : ''}`,
           'Reply with the single word OK.',
         ])
         const events = result.text.split('\n').flatMap((line) => {
@@ -868,6 +930,8 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
             return []
           }
         })
+        if (JSON.parse(readFileSync(budget, 'utf8')).exhausted)
+          throw new SmokeError('RequestBudgetExhausted')
         if (result.code !== 0 || events.some((e) => e.type === 'error'))
           throw new SmokeError(
             result.code === 124
@@ -897,20 +961,13 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
       // The guard allows one provider request using an exclusive marker file.
       // Polling alone can miss an immediate retry. Abort from the driver, not
       // while waiting inside a host event hook.
-      const budget = path.join(
-        r.o.home,
-        '.live-smoke',
-        r.host,
-        'turn-budget.json',
-      )
-      writeFileSync(budget, '{"status":0}')
-      if (existsSync(`${budget}.spent`)) unlinkSync(`${budget}.spent`)
       let done = false
       let value: unknown
       let error: unknown
       let retryMessage: string | undefined
       const pending = api('POST', `/session/${turnSession}/message`, {
         model: { providerID: id, modelID: model.id },
+        variant: smokeVariant(model),
         parts: [{ type: 'text', text: 'Reply with the single word OK.' }],
         tools: {},
       })
@@ -1108,7 +1165,7 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           export default {...original,server:async(input,options)=>{
             const hooks=await original.server(input,options)
             return {...hooks,
-              'chat.params':async(request,output)=>{await hooks['chat.params']?.(request,output);output.maxOutputTokens=1},
+              'chat.params':async(request,output)=>{await hooks['chat.params']?.(request,output);output.maxOutputTokens=16},
               config:async(config)=>{
                 await hooks.config?.(config)
                 for(const block of Object.values(config.provider ?? {})) {
@@ -1132,12 +1189,21 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           path.join(guard, 'server.js'),
           `
           import original from ${JSON.stringify(original)}
-          import {writeFileSync} from 'node:fs'
+          import {writeFileSync,openSync,closeSync} from 'node:fs'
           export default {...original,setup:async(ctx,options)=>{
             const dispose=await original.setup(ctx,options)
-            const hook=await ctx.session.hook('retry',draft=>{draft.decision={retry:false}})
+            const spend=()=>{
+              try {closeSync(openSync(${JSON.stringify(`${budget}.spent`)},'wx',0o600))}
+              catch(error) {if(error.code==='EEXIST') {writeFileSync(${JSON.stringify(budget)},JSON.stringify({exhausted:true}));throw new Error('live-smoke request budget exhausted; retries and continuations disabled')} throw error}
+            }
+            const hooks=await Promise.all([
+              ctx.session.hook('retry',draft=>{draft.decision={retry:false}}),
+              ctx.session.hook('http.request',spend),
+              ctx.session.hook('experimental.ws.send',spend),
+              ctx.session.hook('title',draft=>{draft.result='Live smoke'}),
+            ])
             writeFileSync(${JSON.stringify(ready)},'1')
-            return async()=>{await hook.dispose();if(typeof dispose==='function') await dispose()}
+            return async()=>{for(const hook of hooks) await hook.dispose();if(typeof dispose==='function') await dispose()}
           }}
         `,
         )
@@ -1227,19 +1293,6 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           if (!answer.trim() || answer === 'NoAnswerText')
             throw new SmokeError('NoAnswerText')
           row.turn = `${preview(answer)} (model: ${model.id})`
-          if (host === 'opencode2' && p === 'xai')
-            row.extras = `second same-session turn: ${preview(await driver.turn(id, model, true))}`
-          if (host !== 'pi' && p === 'opencode-go') {
-            try {
-              await driver.turn(id, cheapest(models, host, p, true))
-              row.extras = 'FAIL Anthropic model was not refused'
-            } catch (error) {
-              row.extras =
-                failure(error) === 'LocalUnsupportedAuthHeader'
-                  ? 'PASS local x-api-key refusal'
-                  : `FAIL ${failure(error)}`
-            }
-          }
           if (p === 'cline-pass')
             row.extras =
               'credential-id classified; refusals clear (verify vault row has no provider id)'
@@ -1365,14 +1418,14 @@ function capModels(r: Runner, id: string, models: Model[]) {
     config[key][id].models = models.map((m) => ({
       ...previous.find((p) => p.id === m.id),
       id: m.id,
-      maxTokens: 1,
+      maxTokens: 16,
     }))
   } else {
     config[key][id].models ??= {}
     for (const model of models)
       config[key][id].models[model.id] = {
         ...config[key][id].models[model.id],
-        limit: { ...model.limit, output: 1 },
+        limit: { ...model.limit, output: 16 },
       }
   }
   writeFileSync(file, JSON.stringify(config))
@@ -1383,7 +1436,10 @@ type V1Provider = {
   npm?: string
   models?: Record<
     string,
-    Partial<Omit<Model, 'provider' | 'api'>> & { provider?: { npm?: string } }
+    Partial<Omit<Model, 'provider' | 'api'>> & {
+      provider?: { npm?: string }
+      api?: string | { npm?: string }
+    }
   >
 }
 export function v1Models(provider: V1Provider): Model[] {
@@ -1391,6 +1447,10 @@ export function v1Models(provider: V1Provider): Model[] {
     ...model,
     id,
     provider: provider.id,
-    api: model.provider?.npm ?? provider.npm ?? '@ai-sdk/openai-compatible',
+    api:
+      (typeof model.api === 'string' ? model.api : model.api?.npm) ??
+      model.provider?.npm ??
+      provider.npm ??
+      '@ai-sdk/openai-compatible',
   }))
 }

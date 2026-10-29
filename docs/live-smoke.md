@@ -16,6 +16,19 @@ The entry and README there are local, git-ignored operator artifacts; the
 shared driver is tracked at `scripts/live-smoke/run.ts` and can also be run
 directly with the same arguments.
 
+For each served row with an eligible catalog model, the headless driver attempts
+at most one provider request, with a 16-token output cap. It excludes non-text
+models, prefers an advertised reasoning-off variant
+or a non-reasoning model, and otherwise selects the lowest advertised effort.
+Within those groups it chooses the lowest catalog input-plus-output price.
+OpenCode 2 selects variants with `provider/model#variant`; OpenCode 1 uses the
+message's `variant` field, and Pi uses thinking level `off`. The guards block
+both retries and automatic output-limit continuations before another physical
+send. If the first response is still truncated, `RequestBudgetExhausted` is a
+driver-budget failure, not an account refusal; it is not retried. The second
+xAI turn and Anthropic refusal probes below remain manual checks, not extra
+headless requests. Raw API captures keep their sequence across host restarts.
+
 ## 0. Once, before the first provider
 
 1. Install the published packages, or a packed build of this branch:
@@ -51,7 +64,7 @@ Command per provider (the method id is `claustrum-auth`):
 | fireworks | `opencode auth login fireworks-ai --method claustrum-auth` |
 | inception | `opencode auth login inception --method claustrum-auth` |
 | cline-pass | `opencode auth login cline-pass --method claustrum-auth` |
-| kimi-coding | `opencode auth login kimi-for-coding --method claustrum-auth` |
+| kimi-coding | `opencode auth login kimi-code-plan-global --method claustrum-auth` |
 | openrouter | `opencode auth login openrouter --method claustrum-auth` |
 | typesafe | `opencode auth login typesafe --method claustrum-auth` |
 | meta | `opencode auth login meta --method claustrum-auth` |
@@ -62,6 +75,15 @@ opencode-zen is not served on OpenCode 2 (`docs/providers.md`): check in
 step 1 that `/claustrum refusals` lists `apikey:opencode-zen` as
 `not-on-this-host`, and that `opencode` does not offer the claustrum-auth
 login method.
+
+Typesafe requires a host catalog entry with a usable model. The pinned
+OpenCode 2.2.0 catalog lacks it, so `unknown-to-host` is the correct refusal,
+not a successful provider smoke. The captured OpenCode 1 catalog also has no
+Typesafe models; its plugin may list support, but no turn can be sent. At capture
+time the old driver reported `NoBearerModel` even when the catalog model list was
+empty. The corrected driver uses `NoCatalogModels` for that case, distinct from
+a catalog containing only excluded transports. Do not
+invent a model or override the host's catalog to pass.
 
 Steps, per provider:
 
@@ -96,7 +118,7 @@ a slash command, because OpenCode 1 has one auth hook per provider:
 | fireworks | `/claustrum use fireworks-ai` |
 | inception | `/claustrum use inception` |
 | cline-pass | `/claustrum use cline-pass` |
-| kimi-coding | `/claustrum use kimi-for-coding` |
+| kimi-coding | `/claustrum use kimi-code-plan-global` |
 | openrouter | `/claustrum use openrouter` |
 | typesafe | `/claustrum use typesafe` |
 | meta | `/claustrum use meta` |

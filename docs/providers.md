@@ -15,7 +15,7 @@ vault row must look like for the provider to be served.
 | deepseek | `deepseek` | `deepseek` | `deepseek` | `deepseek` | `https://api.deepseek.com` |
 | fireworks | `fireworks-ai` | `fireworks-ai` | `fireworks-ai` | `fireworks` | `https://api.fireworks.ai` |
 | inception | `inception` | `inception` | `inception` | — | `https://api.inceptionlabs.ai` |
-| kimi-coding | `kimi-code-plan-global` | `kimi-for-coding` | `kimi-for-coding` | `kimi-coding` | `https://api.kimi.com` |
+| kimi-coding | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` | `https://api.kimi.com`, `https://api.kimi.ai` |
 | openrouter | `openrouter` | `openrouter` | `openrouter` | `openrouter` | `https://openrouter.ai` |
 | typesafe | `typesafe` | `typesafe` | `typesafe` | — | `https://api.typesafe.ai` |
 | meta | `meta` | `meta` | `meta` | `meta` | `https://api.meta.ai` |
@@ -36,14 +36,14 @@ and pricing use. The vault owner does not retag rows to suit this plugin, so
 the table maps each fleet id to the running host's own id:
 
 - `fireworks-ai` is `fireworks-ai` on OpenCode and `fireworks` on Pi;
-- `kimi-code-plan-global` is `kimi-for-coding` on OpenCode and `kimi-coding`
+- `kimi-code-plan-global` is also `kimi-code-plan-global` on OpenCode and `kimi-coding`
   on Pi;
 - every other entry's fleet id is the same as its host ids.
 
 A row is served only when every id it carries is a fleet id of one entry. A
 fleet id the table has no mapping for is refused as `unsupported-provider` and
 listed by `/claustrum refusals`; the plugin never guesses. A host id that is
-not also a fleet id (`fireworks`, `kimi-for-coding`, `kimi-coding`) is no
+not also a fleet id (`fireworks`, `kimi-coding`) is no
 exception. A row with ids of two entries, or a known id beside an unknown one,
 is refused as `mixed-services`, because a 401 on it would not name one service
 (design section 4.3).
@@ -86,7 +86,7 @@ pins, which carry the catalogs the hosts themselves use:
 | deepseek | `deepseek`, base `https://api.deepseek.com`, `openai-completions` | `providers/deepseek.js`, base `https://api.deepseek.com/v1` | yes |
 | fireworks | `fireworks`, base `https://api.fireworks.ai/inference`, 8 `openai-completions` and 14 `anthropic-messages` models | `providers/fireworks.js`, base `https://api.fireworks.ai/inference/v1` | yes |
 | inception | absent from Pi's catalog | `providers/openai-compatible.js` with the catalog's `api.inceptionlabs.ai` base | yes (OpenAI-compatible bearer) |
-| kimi-coding | `kimi-coding`, base `https://api.kimi.com/coding/v1`, `openai-completions` | `providers/moonshot.js` (the host routes `kimi-for-coding` through it); the catalog supplies the `api.kimi.com` base | yes |
+| kimi-coding | `kimi-coding`, base `https://api.kimi.com/coding/v1`, `openai-completions` | `providers/moonshot/chat.js` (the host routes `kimi-code-plan-global` through it); the catalog supplies the regional base | yes |
 | openrouter | `openrouter`, base `https://openrouter.ai/api/v1` | `providers/openrouter.js`, base `https://openrouter.ai/api/v1` | yes |
 | typesafe | `typesafe`, base `https://api.typesafe.ai/v1/`, api `typesafe-system-one` | `providers/typesafe-ai.js`, base `https://api.typesafe.ai/v1`, `AuthOptions.bearer` | OpenCode yes; Pi's api does not take a caller `fetch` |
 | meta | `meta` (`providers/meta.js`), base `https://api.meta.ai/v1`, `openai-responses`, 6 models | `providers/meta.js`, base `https://api.meta.ai/v1`; responses, chat and messages routes all use `AuthOptions.bearer(input, "META_API_KEY")` | yes |
@@ -96,9 +96,31 @@ pins, which carry the catalogs the hosts themselves use:
 
 Host rules that follow:
 
+- **Kimi Code's provider id is `kimi-code-plan-global`, not its model id.**
+  The OpenCode 1 models.dev catalog (`https://models.dev/api.json`, read
+  2026-10-29; live capture `opencode1/api-110.json:1`) lists six models under
+  that provider, with base `https://api.kimi.ai/coding/v1`. The bundled catalog
+  in the pinned `@opencode/cli` 2.2.0 returns the same provider and integration
+  id through the plugin's `ctx.provider.get` with model fetching disabled
+  (checked 2026-10-29). Its snapshot source is
+  [`packages/core/src/models-dev/snapshot.txt` at v2.2.0](https://github.com/anomalyco/opencode/blob/1097e2668b1e08ad63bdf0b1c4860b9bc01e420c/packages/core/src/models-dev/snapshot.txt).
+  `kimi-for-coding` is not a provider alias. Kimi's first-party
+  [Kimi Code docs](https://www.kimi.com/code/docs/en), **Service Endpoint**
+  (read 2026-10-29), document the OpenAI-compatible endpoints as China
+  `https://api.kimi.com/coding/v1` and Overseas
+  `https://api.kimi.ai/coding/v1`. Only those two exact HTTPS origins are
+  allowed; another scheme, port or Kimi subdomain is not.
+
 - **typesafe is OpenCode only.** Pi registers `typesafe` with its
   `typesafe-system-one` api, which never reaches the caller `fetch`, so the
   plugin's fetch cannot see a typesafe request on Pi (design section 9.2).
+  OpenCode support is conditional on the host catalog containing a `typesafe`
+  provider and a usable model; the driver package's existence alone is not
+  enough. The 2026-10-29 OpenCode 1 capture (`opencode1/api-110.json:1`) has
+  no Typesafe provider or models: it is listed by the plugin's support table
+  but unservable on that host, not a passed turn. OpenCode 2.2.0's bundled
+  catalog also lacks it (`ctx.provider.get`, model fetching disabled, checked
+  2026-10-29), so `unknown-to-host` correctly refuses it before activation.
 - **xai is served over WebSocket on OpenCode 2.** See "xAI on OpenCode 2"
   below. OpenCode 1 sends xAI over HTTP through `options.fetch` (design
   section 8.4) and Pi through the caller `fetch` of `openai-responses`.
@@ -347,7 +369,7 @@ select the provider either.
 | `apikey:inception` | `inception` | `llm-provider` | inception on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
 | `apikey:openrouter` | `openrouter` | `llm-provider` | openrouter on every host |
 | `apikey:typesafe` | `typesafe` | `llm-provider` | typesafe on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
-| `apikey:kimi-for-coding` | `kimi-code-plan-global` | `llm-provider` | `kimi-for-coding` on OpenCode 1 and 2, `kimi-coding` on Pi |
+| `apikey:kimi-for-coding` | `kimi-code-plan-global` | `llm-provider` | `kimi-code-plan-global` on OpenCode 1 and 2, `kimi-coding` on Pi |
 | `apikey:cline-pass` | none | `llm-provider` | cline-pass on OpenCode 1 and 2, by its exact credential id; refused `not-on-this-host` on Pi |
 | `oauth:meta` | `meta` | `llm-provider,meta-native` | meta on every host, once the vault serves its expiry (above) |
 | `oauth:xai` | `xai` | `llm-provider,xai-native` | xai on every host; on OpenCode 2 over HTTP and in the WebSocket handshake |

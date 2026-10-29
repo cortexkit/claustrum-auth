@@ -31,8 +31,12 @@ describe.skipIf(!enabled)(
   'headless live smoke on real hosts with fake vault',
   () => {
     for (const host of ['opencode1', 'opencode2', 'pi'] as Host[])
-      for (const rejected of [false, true])
-        test(`${host}${rejected ? ' provider 429' : ''}`, async () => {
+      for (const rejected of [
+        false,
+        true,
+        ...(host === 'opencode2' ? ['length'] : []),
+      ])
+        test(`${host}${rejected === 'length' ? ' output-limit continuation budget' : rejected ? ' provider 429' : ''}`, async () => {
           const base = path.resolve('target/scratch/live-smoke-e2e')
           mkdirSync(base, { recursive: true })
           const root = mkdtempSync(path.join(base, `${host}-`))
@@ -40,14 +44,16 @@ describe.skipIf(!enabled)(
           mkdirSync(home, { recursive: true })
           const mock = await startMock()
           mock.reply = () =>
-            rejected
-              ? {
-                  kind: 'status',
-                  status: 429,
-                  headers: { 'retry-after': '0' },
-                  body: '{"error":{"message":"rate limit","type":"rate_limit_error"}}',
-                }
-              : { kind: 'ok', text: 'OK' }
+            rejected === 'length'
+              ? { kind: 'ok', text: '', finish: 'length' }
+              : rejected
+                ? {
+                    kind: 'status',
+                    status: 429,
+                    headers: { 'retry-after': '0' },
+                    body: '{"error":{"message":"rate limit","type":"rate_limit_error"}}',
+                  }
+                : { kind: 'ok', text: 'OK' }
           try {
             const fake = path.join(home, 'fake')
             mkdirSync(fake)
@@ -188,7 +194,7 @@ describe.skipIf(!enabled)(
                           id: 'm',
                           name: 'm',
                           contextWindow: 8000,
-                          maxTokens: 1,
+                          maxTokens: 4096,
                           cost: {
                             input: 0,
                             output: 0,
@@ -204,7 +210,7 @@ describe.skipIf(!enabled)(
             }
             const model = {
               name: 'm',
-              limit: { context: 8000, output: 1 },
+              limit: { context: 8000, output: 4096 },
               cost: { input: 0, output: 0 },
             }
             const config =
@@ -214,7 +220,22 @@ describe.skipIf(!enabled)(
                       cerebras: {
                         package: '@ai-sdk/openai-compatible',
                         settings: { baseURL: `${mock.origin}/v1` },
-                        models: { m: model },
+                        models: {
+                          m: {
+                            ...model,
+                            settings: { reasoningEffort: 'high' },
+                            variants: [
+                              {
+                                id: 'high',
+                                settings: { reasoningEffort: 'high' },
+                              },
+                              {
+                                id: 'none',
+                                settings: { reasoningEffort: 'none' },
+                              },
+                            ],
+                          },
+                        },
                       },
                     },
                   }
@@ -223,7 +244,17 @@ describe.skipIf(!enabled)(
                       cerebras: {
                         npm: '@ai-sdk/openai-compatible',
                         options: { baseURL: `${mock.origin}/v1` },
-                        models: { m: model },
+                        models: {
+                          m: {
+                            ...model,
+                            reasoning: true,
+                            options: { reasoningEffort: 'high' },
+                            variants: {
+                              high: { reasoningEffort: 'high' },
+                              none: { reasoningEffort: 'none' },
+                            },
+                          },
+                        },
                       },
                     },
                   }
@@ -259,7 +290,8 @@ describe.skipIf(!enabled)(
               '.cortexkit/internal-docs/investigations',
             )
             mkdirSync(evidence, { recursive: true })
-            const suffix = rejected ? '-429' : ''
+            const suffix =
+              rejected === 'length' ? '-length' : rejected ? '-429' : ''
             writeFileSync(
               path.join(evidence, `live-smoke-${host}${suffix}.md`),
               report,
@@ -290,11 +322,32 @@ describe.skipIf(!enabled)(
             expect(row.leak).toBe('clean')
             const turns = mock.requests
             expect(turns).toHaveLength(1)
+            if (rejected === 'length')
+              expect(row.turn).toBe('RequestBudgetExhausted')
             expect(turns[0].headers.authorization).toBe(
               'Bearer fake-vault-cerebras-value',
             )
             const body = JSON.parse(turns[0].body)
-            expect(body.max_tokens ?? body.max_completion_tokens).toBe(1)
+            expect(body.max_tokens ?? body.max_completion_tokens).toBe(16)
+            expect(body.model).toBe('m')
+            if (host !== 'pi') {
+              expect(body.reasoning_effort).toBe('none')
+              const saved = JSON.parse(
+                readFileSync(env.OPENCODE_CONFIG, 'utf8'),
+              )
+              expect(
+                saved[host === 'opencode1' ? 'provider' : 'providers'].cerebras
+                  .models.m.limit.output,
+              ).toBe(16)
+              if (host === 'opencode1') {
+                const initial = JSON.parse(
+                  readFileSync(path.join(logs, 'api-1.json'), 'utf8'),
+                )
+                expect(initial.provider.cerebras.models.m.limit.output).toBe(
+                  4096,
+                )
+              }
+            }
             expect(report).not.toContain('fake-vault-cerebras-value')
             expect(row.passed).toBe(!rejected)
             expect(report).not.toContain('fake-own-key')
