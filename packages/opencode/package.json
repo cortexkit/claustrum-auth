@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@cortexkit/claustrum-client": "^0.13.0",
-    "@cortexkit/common-auth": "^0.29.0",
+    "@cortexkit/common-auth": "^0.29.1",
     "@cortexkit/private-files": "^0.2.2",
     "@cortexkit/subc-client": "^0.22.10"
   },
