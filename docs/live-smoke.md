@@ -8,6 +8,14 @@ vault key and an enrolled host, so this page is the script for the run.
 Record the result in the provider batch's slice report: host, OS, provider,
 the turn's output and the `/claustrum` status line.
 
+For the operator-only headless equivalent, see
+`.cortexkit/scripts/live-smoke/README.md` and run its `run.ts` with `--dry`
+first. The local driver uses an already-enrolled scratch home, writes one
+Markdown table per host, and leaves the personal-key checks below manual.
+The entry and README there are local, git-ignored operator artifacts; the
+shared driver is tracked at `scripts/live-smoke/run.ts` and can also be run
+directly with the same arguments.
+
 ## 0. Once, before the first provider
 
 1. Install the published packages, or a packed build of this branch:

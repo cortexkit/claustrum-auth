@@ -61,6 +61,15 @@ export function vaultRow(
   }
 }
 
+export async function seedEnrollment(stateDir: string) {
+  const { tokenPath } = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+  await writeJsonAtomic(tokenPath, {
+    token: '01'.repeat(32),
+    token_generation: 1,
+  })
+  return tokenPath
+}
+
 // ---------- the pinned host ----------
 
 function binaryIn(root: string): string | undefined {
@@ -307,14 +316,7 @@ export async function profile(
     ...control,
   }
   await writeFile(controlFile, JSON.stringify(current))
-  if (!freshEnrollment)
-    await writeJsonAtomic(
-      hostEnrollmentPaths({
-        stateDir: path.join(dirs.control, 'state'),
-        host: 'opencode',
-      }).tokenPath,
-      { token: '01'.repeat(32), token_generation: 1 },
-    )
+  if (!freshEnrollment) await seedEnrollment(path.join(dirs.control, 'state'))
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue
