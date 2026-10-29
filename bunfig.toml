@@ -1,0 +1,6 @@
+[test]
+# Unprefixed test arguments are substring filters, so Bun walks the repository
+# first and follows directory symlinks. target/ holds scratch toolchains and a
+# symlink-to-parent safety fixture; following that loop exhausted Bun's memory
+# before test modules loaded. Prune generated trees at discovery, not execution.
+pathIgnorePatterns = ["target/**"]
