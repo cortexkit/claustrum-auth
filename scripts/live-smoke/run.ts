@@ -113,23 +113,26 @@ function lstatExists(file: string) {
 
 export function environment(home: string, connection: string, host?: Host) {
   const dataRoot = host ? path.join(home, '.live-smoke', host) : home
+  // Enrollment is bound to the config folder. Both OpenCode versions must use
+  // the default folder to find the scratch home's existing enrollment.
+  const configRoot = host === 'pi' ? dataRoot : home
   const dirs = {
     HOME: home,
     USERPROFILE: home,
     APPDATA: path.join(home, '.config'),
     LOCALAPPDATA: path.join(home, '.local/share'),
     XDG_RUNTIME_DIR: path.join(home, '.live-smoke/runtime'),
-    XDG_CONFIG_DIRS: path.join(dataRoot, '.config'),
+    XDG_CONFIG_DIRS: path.join(configRoot, '.config'),
     XDG_DATA_DIRS: path.join(dataRoot, '.local/share'),
-    XDG_CONFIG_HOME: path.join(dataRoot, '.config'),
+    XDG_CONFIG_HOME: path.join(configRoot, '.config'),
     XDG_DATA_HOME: path.join(dataRoot, '.local/share'),
     XDG_STATE_HOME: path.join(home, '.local/state'),
     XDG_CACHE_HOME: path.join(dataRoot, '.cache'),
     TMPDIR: path.join(home, '.live-smoke/tmp'),
     TMP: path.join(home, '.live-smoke/tmp'),
     TEMP: path.join(home, '.live-smoke/tmp'),
-    OPENCODE_CONFIG_DIR: path.join(dataRoot, '.config/opencode'),
-    OPENCODE_CONFIG: path.join(dataRoot, '.config/opencode/opencode.json'),
+    OPENCODE_CONFIG_DIR: path.join(configRoot, '.config/opencode'),
+    OPENCODE_CONFIG: path.join(configRoot, '.config/opencode/opencode.json'),
     PI_CODING_AGENT_DIR: path.join(home, '.pi/agent'),
     npm_config_cache: path.join(home, '.cache/npm'),
   }
@@ -1064,10 +1067,14 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
             readFileSync(path.join(plugin, 'package.json'), 'utf8'),
           )
           const server = manifest.exports?.['./server']
+          // The published server entry uses conditional exports; `main` is
+          // the legacy entry and has no OpenCode 2 setup hook.
+          const serverEntry =
+            typeof server === 'string' ? server : server?.import
           entry = path.resolve(
             plugin,
-            host === 'opencode2' && typeof server === 'string'
-              ? server
+            host === 'opencode2' && typeof serverEntry === 'string'
+              ? serverEntry
               : (manifest.main ?? 'index.js'),
           )
         }

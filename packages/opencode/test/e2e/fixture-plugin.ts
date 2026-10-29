@@ -17,6 +17,11 @@ import {
 } from '../../../core/test-entry.ts'
 import { opencode1Hosts } from '../../src/v1/plugin.ts'
 
+export {
+  enrollmentAuthority,
+  hostEnrollmentPaths,
+} from '@cortexkit/common-auth/claustrum'
+
 export interface VaultControl {
   active: boolean
   outage: boolean

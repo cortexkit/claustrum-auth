@@ -152,12 +152,19 @@ describe('live smoke safety', () => {
       output.mockRestore()
     }
   })
-  test('each host has separate data roots and shares only the enrolled state root', () => {
+  test('OpenCode hosts keep separate data roots but share the default config and enrolled state', () => {
     const home = mkdtempSync(path.join(scratch, 'env-'))
     const one = environment(home, '/read-only/connection.json', 'opencode1')
     const two = environment(home, '/read-only/connection.json', 'opencode2')
     expect(one.XDG_DATA_HOME).not.toBe(two.XDG_DATA_HOME)
     expect(one.XDG_STATE_HOME).toBe(path.join(home, '.local/state'))
+    for (const env of [one, two]) {
+      expect(env.XDG_CONFIG_HOME).toBe(path.join(home, '.config'))
+      expect(env.OPENCODE_CONFIG_DIR).toBe(path.join(home, '.config/opencode'))
+      expect(env.OPENCODE_CONFIG).toBe(
+        path.join(home, '.config/opencode/opencode.json'),
+      )
+    }
     expect(one.HOME).toBe(home)
     expect(one.OPENCODE_PASSWORD === one.OPENCODE_SERVER_PASSWORD).toBe(true)
     expect(one.OPENCODE_PASSWORD !== two.OPENCODE_PASSWORD).toBe(true)

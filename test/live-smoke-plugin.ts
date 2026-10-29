@@ -1,13 +1,17 @@
 // Only the e2e smoke test loads this entry. The production runner cannot opt
 // into loopback origins or the file-controlled fake vault through CLI flags.
-import path from 'node:path'
 import {
   createTestCore,
   supportedProviders,
 } from '../packages/core/test-entry.ts'
+import { opencodeStateDir } from '../packages/opencode/src/state-dir.ts'
 import { opencode1Hosts } from '../packages/opencode/src/v1/plugin.ts'
 import { setupServer } from '../packages/opencode/src/v2/setup.ts'
-import { fixtureClient } from '../packages/opencode/test/e2e/fixture-plugin.ts'
+import {
+  enrollmentAuthority,
+  fixtureClient,
+  hostEnrollmentPaths,
+} from '../packages/opencode/test/e2e/fixture-plugin.ts'
 import { createPiExtension } from '../packages/pi/src/extension.ts'
 
 const dir = process.env.CLAUSTRUM_AUTH_E2E_DIR ?? ''
@@ -35,35 +39,38 @@ const plugin =
         connect: async () => client,
         syncIntervalMs: 100,
       })
-    : process.env.LIVE_SMOKE_TEST_HOST === 'opencode1'
-      ? {
-          id: 'live-smoke-test',
-          server: (input: Parameters<typeof opencode1Hosts>[1]) =>
-            opencode1Hosts(
-              {
-                table,
-                createCore,
-                stateDir: () => path.join(dir, 'state'),
-                isCustodyActive: async () => true,
-                connect: async () => client,
-              },
-              input,
-            ),
-        }
-      : {
-          id: 'live-smoke-test',
-          setup: (ctx: Parameters<typeof setupServer>[0]) =>
-            setupServer(ctx, {
+    : {
+        id: 'live-smoke-test',
+        server: (input: Parameters<typeof opencode1Hosts>[1]) =>
+          opencode1Hosts(
+            {
               table,
-              authority: async () => 'vault',
-              createCore: (facts) =>
-                createCore({
-                  facts,
-                  stateDir: path.join(dir, 'state'),
-                  tokenPath: process.env.LIVE_SMOKE_TEST_TOKEN_PATH ?? '',
-                  isCustodyActive: async () => true,
-                  connect: async () => client,
-                }),
-            }),
-        }
+              createCore,
+              connect: async () => client,
+            },
+            input,
+          ),
+      }
+
+export const serverPlugin = {
+  id: 'live-smoke-test',
+  async setup(ctx: Parameters<typeof setupServer>[0]) {
+    const stateDir = await opencodeStateDir()
+    const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+    const authority = () =>
+      enrollmentAuthority(paths, 'claustrum-auth-opencode')
+    return setupServer(ctx, {
+      table,
+      authority,
+      createCore: (facts) =>
+        createCore({
+          facts,
+          stateDir,
+          tokenPath: paths.tokenPath,
+          isCustodyActive: async () => (await authority()) === 'vault',
+          connect: async () => client,
+        }),
+    })
+  },
+}
 export default plugin

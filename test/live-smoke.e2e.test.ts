@@ -51,8 +51,15 @@ describe.skipIf(!enabled)(
           try {
             const fake = path.join(home, 'fake')
             mkdirSync(fake)
-            mkdirSync(path.join(fake, 'state'), { mode: 0o700 })
-            const tokenPath = await seedEnrollment(path.join(fake, 'state'))
+            // Seed the default install location independently of the driver's
+            // environment, so a config-folder override cannot hide a mismatch.
+            const state = path.join(
+              home,
+              '.local/state/cortexkit/claustrum-auth/opencode',
+            )
+            mkdirSync(state, { recursive: true, mode: 0o700 })
+            await seedEnrollment(state)
+            writeFileSync(path.join(home, 'connection.json'), '{}')
             writeFileSync(
               path.join(fake, 'vault.json'),
               JSON.stringify({
@@ -82,11 +89,24 @@ describe.skipIf(!enabled)(
               'dir',
             )
             writeFileSync(
+              path.join(bundle, 'server.js'),
+              "export {serverPlugin as default} from './index.js'\n",
+            )
+            // Match the published split entries and conditional server export.
+            // The legacy default deliberately has no OpenCode 2 setup hook.
+            writeFileSync(
               path.join(bundle, 'package.json'),
               JSON.stringify({
                 name: 'live-smoke-test',
                 type: 'module',
                 main: './index.js',
+                exports: {
+                  '.': { types: './index.d.ts', import: './index.js' },
+                  './server': {
+                    types: './server.d.ts',
+                    import: './server.js',
+                  },
+                },
               }),
             )
             const env = environment(home, path.join(home, 'connection.json'))
@@ -119,6 +139,13 @@ describe.skipIf(!enabled)(
                 )
                 expect(install.status).toBe(0)
               }
+              const version = spawnSync(cli, ['--version'], {
+                env,
+                encoding: 'utf8',
+                timeout: 20_000,
+              })
+              expect(version.status).toBe(0)
+              expect(version.stdout.trim()).toBe('opencode v2.2.0')
               binaries[host] = cli
             }
             if (host === 'pi') {
@@ -219,12 +246,10 @@ describe.skipIf(!enabled)(
                       : bundle,
                 },
                 config: { [host]: config },
-                skipEnrollment: true,
                 env: {
                   CLAUSTRUM_AUTH_E2E_DIR: fake,
                   CLAUSTRUM_AUTH_E2E_ORIGIN: mock.origin,
                   LIVE_SMOKE_TEST_HOST: host,
-                  LIVE_SMOKE_TEST_TOKEN_PATH: tokenPath,
                 },
               },
             )
