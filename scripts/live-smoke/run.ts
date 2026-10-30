@@ -1487,12 +1487,18 @@ export function removeLegacyPiCaps(config: {
   // Pi treats id/maxTokens-only entries as full custom definitions and supplies
   // defaults that hide catalog prices and reasoning controls. The former cap
   // writer generated that shape; retain definitions with any additional fields.
-  for (const provider of Object.values(config.providers ?? {}))
-    if (provider.models)
+  for (const [id, provider] of Object.entries(config.providers ?? {})) {
+    if (provider.models) {
       provider.models = provider.models.filter(
         (m) =>
           !(typeof m.maxTokens === 'number' && Object.keys(m).length === 2),
       )
+      // Pi rejects a provider with only an empty models list. Remove empty
+      // lists even when read from disk, and drop providers with no settings.
+      if (!provider.models.length) delete provider.models
+    }
+    if (!Object.keys(provider).length) delete config.providers?.[id]
+  }
 }
 
 export function capPiModels(

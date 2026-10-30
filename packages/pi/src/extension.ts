@@ -14,6 +14,9 @@ import {
   type ProviderEntry,
   piEnrollment,
   SlotQueue,
+  startupRefusal,
+  startupStep,
+  startupSync,
   transitionActivation,
   unsavedRosterCause,
   vaultMenuText,
@@ -291,24 +294,28 @@ class PiRuntime {
     if (form === 'owned' && served.registered !== 'owned') {
       // Read the composed models while the available form (or nothing) is
       // registered; the owned form replaces them.
-      served.models = this.#ctx.modelRegistry
-        .getAll()
-        .filter((model) => model.provider === served.provider)
+      served.models = startupSync('pi-models', () =>
+        this.#ctx.modelRegistry.getAll(),
+      ).filter((model) => model.provider === served.provider)
     }
     // Pi merges a re-registration over the previous one and keeps any field it
     // omits, so registering without `models` would keep the owned list. Only
     // removing the registration first brings back Pi's built-in and models.json
     // models (measured in the Pi spike, docs/pi-spike.md).
     if (form === 'available' && served.registered === 'owned')
-      this.#pi.unregisterProvider(served.provider)
-    this.#pi.registerProvider(served.provider, {
-      api: served.api,
-      streamSimple: (model, context, options) =>
-        this.stream(served, model, context, options),
-      ...(form === 'owned'
-        ? { models: ownedModels(served.models, served.api) }
-        : {}),
-    })
+      startupSync('pi-register', () =>
+        this.#pi.unregisterProvider(served.provider),
+      )
+    startupSync('pi-register', () =>
+      this.#pi.registerProvider(served.provider, {
+        api: served.api,
+        streamSimple: (model, context, options) =>
+          this.stream(served, model, context, options),
+        ...(form === 'owned'
+          ? { models: ownedModels(served.models, served.api) }
+          : {}),
+      }),
+    )
     served.registered = form
   }
 
@@ -602,7 +609,9 @@ async function startRuntime(
     }
   }
   const byProvider = new Map<string, Model<Api>[]>()
-  for (const model of ctx.modelRegistry.getAll()) {
+  for (const model of startupSync('pi-models', () =>
+    ctx.modelRegistry.getAll(),
+  )) {
     const models = byProvider.get(model.provider) ?? []
     models.push(model)
     byProvider.set(model.provider, models)
@@ -612,22 +621,24 @@ async function startRuntime(
     const api = bearerApi(models)
     if (api) apis.set(provider, api)
   }
-  const core = options.createCore({
-    stateDir,
-    tokenPath: paths.tokenPath,
-    connect:
-      options.connect ??
-      (() =>
-        connectClaustrumScopedClient({
-          connectionFile: resolveClaustrumConnectionPath(),
-          projectRoot: ctx.cwd,
-          storagePath: paths.tokenPath,
-          logger: () => {},
-        })),
-    isCustodyActive: async () => (await authority()) === 'vault',
-    onError: () => {},
-    facts: { host: 'pi', catalog: [...apis.keys()].sort() },
-  })
+  const core = startupSync('pi-state', () =>
+    options.createCore({
+      stateDir,
+      tokenPath: paths.tokenPath,
+      connect:
+        options.connect ??
+        (() =>
+          connectClaustrumScopedClient({
+            connectionFile: resolveClaustrumConnectionPath(),
+            projectRoot: ctx.cwd,
+            storagePath: paths.tokenPath,
+            logger: () => {},
+          })),
+      isCustodyActive: async () => (await authority()) === 'vault',
+      onError: () => {},
+      facts: { host: 'pi', catalog: [...apis.keys()].sort() },
+    }),
+  )
   const flags = new FlagStore(stateDir)
   await flags.load()
   const runtime = new PiRuntime(pi, ctx, core, flags, authority)
@@ -654,9 +665,11 @@ async function startRuntime(
       marks: new Map(),
     })
   }
-  await runtime.start(
-    (await authority()) !== 'local',
-    options.syncIntervalMs ?? 5_000,
+  await startupStep('pi-start', async () =>
+    runtime.start(
+      (await authority()) !== 'local',
+      options.syncIntervalMs ?? 5_000,
+    ),
   )
   return runtime
 }
@@ -665,13 +678,12 @@ export function createPiExtension(options: PiExtensionOptions) {
   return function claustrumAuth(pi: ExtensionAPI): void {
     let runtime: Promise<PiRuntime | undefined> | undefined
     let latest: ExtensionContext | undefined
+    let startupFailure: string | undefined
     pi.on('session_start', async (_event, ctx) => {
       latest = ctx
       runtime ??= startRuntime(pi, ctx, options).catch((error) => {
-        ctx.ui.notify(
-          `claustrum-auth did not start: ${errorCode(error)}`,
-          'error',
-        )
+        startupFailure = startupRefusal('pi-start', error).message
+        ctx.ui.notify(startupFailure, 'error')
         return undefined
       })
       ;(await runtime)?.setContext(ctx)
@@ -679,6 +691,7 @@ export function createPiExtension(options: PiExtensionOptions) {
     pi.on('session_shutdown', async () => {
       const current = await runtime
       runtime = undefined
+      startupFailure = undefined
       await current?.dispose()
     })
     pi.registerCommand(command.slice(1), {
@@ -688,7 +701,7 @@ export function createPiExtension(options: PiExtensionOptions) {
         const current = await runtime
         if (!current) {
           ctx.ui.notify(
-            'claustrum-auth is not running in this session.',
+            startupFailure ?? 'claustrum-auth is not running in this session.',
             'error',
           )
           return

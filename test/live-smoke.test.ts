@@ -250,6 +250,30 @@ describe('live smoke safety', () => {
       custom: { maxTokens: 32 },
     })
   })
+  test('Pi removes empty legacy cap providers, including a previous cleanup result', () => {
+    const config: {
+      providers: Record<
+        string,
+        {
+          models?: { id: string; maxTokens: number }[]
+          modelOverrides?: Record<string, Record<string, unknown>>
+          baseUrl?: string
+        }
+      >
+    } = {
+      providers: {
+        meta: { models: [{ id: 'catalog', maxTokens: 16 }] },
+        xai: { models: [] },
+        deepseek: { models: [], modelOverrides: { m: { maxTokens: 32 } } },
+        custom: { models: [], baseUrl: 'https://fixture.invalid/v1' },
+      },
+    }
+    removeLegacyPiCaps(config)
+    expect(config.providers).toEqual({
+      deepseek: { modelOverrides: { m: { maxTokens: 32 } } },
+      custom: { baseUrl: 'https://fixture.invalid/v1' },
+    })
+  })
   test('Pi Zen prefers the offered small Responses model over disabled legacy gpt-5', () => {
     expect(
       cheapest(

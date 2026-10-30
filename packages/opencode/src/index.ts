@@ -1,6 +1,7 @@
 import {
   createCore,
   pluginId,
+  startupStep,
   supportedProviders,
 } from '@cortexkit/claustrum-auth-core'
 import type { PluginModule } from '@opencode-ai/plugin'
@@ -11,7 +12,9 @@ import { opencode1Hosts } from './v1/plugin.js'
 const claustrumAuth = {
   id: pluginId,
   server: async (input) =>
-    opencode1Hosts({ table: supportedProviders, createCore }, input),
+    startupStep('opencode-start', () =>
+      opencode1Hosts({ table: supportedProviders, createCore }, input),
+    ),
 } satisfies PluginModule
 
 export default claustrumAuth

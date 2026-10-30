@@ -35,11 +35,13 @@ describe.skipIf(!enabled)(
         false,
         true,
         'reasoning',
+        ...(host === 'pi' ? ['legacy-caps'] : []),
         ...(host === 'opencode2' ? ['length'] : []),
       ])
-        test(`${host}${rejected === 'reasoning' ? ' reasoning answer budget' : rejected === 'length' ? ' output-limit continuation budget' : rejected ? ' provider 429' : ''}`, async () => {
+        test(`${host}${rejected === 'legacy-caps' ? ' legacy caps startup' : rejected === 'reasoning' ? ' reasoning answer budget' : rejected === 'length' ? ' output-limit continuation budget' : rejected ? ' provider 429' : ''}`, async () => {
           const reasoning = rejected === 'reasoning'
-          const failed = Boolean(rejected) && !reasoning
+          const failed =
+            Boolean(rejected) && !reasoning && rejected !== 'legacy-caps'
           const base = path.resolve('target/scratch/live-smoke-e2e')
           mkdirSync(base, { recursive: true })
           const root = mkdtempSync(path.join(base, `${host}-`))
@@ -201,6 +203,12 @@ describe.skipIf(!enabled)(
                 path.join(env.PI_CODING_AGENT_DIR, 'models.json'),
                 JSON.stringify({
                   providers: {
+                    ...(rejected === 'legacy-caps'
+                      ? {
+                          meta: { models: [{ id: 'old', maxTokens: 16 }] },
+                          xai: { models: [] },
+                        }
+                      : {}),
                     cerebras: {
                       baseUrl: `${mock.origin}/v1`,
                       api: 'openai-completions',
@@ -322,11 +330,13 @@ describe.skipIf(!enabled)(
             mkdirSync(evidence, { recursive: true })
             const suffix = reasoning
               ? '-reasoning'
-              : rejected === 'length'
-                ? '-length'
-                : rejected
-                  ? '-429'
-                  : ''
+              : rejected === 'legacy-caps'
+                ? '-legacy-caps'
+                : rejected === 'length'
+                  ? '-length'
+                  : rejected
+                    ? '-429'
+                    : ''
             writeFileSync(
               path.join(evidence, `live-smoke-${host}${suffix}.md`),
               report,

@@ -32,6 +32,8 @@ operator capture (`pi/child-13.stdout:13`).
 Pi caps use `modelOverrides`, not replacement model definitions, so prices,
 reasoning flags and thinking-level maps survive. The driver removes only old
 smoke-generated `id`/`maxTokens` definitions before discovering the catalog.
+It also removes empty provider objects left by those caps: Pi rejects a
+provider whose only setting is an empty `models` list during registration.
 OpenCode 2 selects variants with `provider/model#variant`; OpenCode 1 uses the
 message's `variant` field, and Pi sets thinking level `off` after selecting
 the model so a saved per-model level cannot override it. The guards block

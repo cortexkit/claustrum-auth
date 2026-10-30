@@ -115,6 +115,64 @@ test('loading the extension registers /claustrum and session hooks and touches n
 
 const servedProvider = 'fixture-a'
 
+test('Pi startup refusal names model registration and the remedy without echoing the host error', async () => {
+  const h = await harness([])
+  const agent = await agentDir({})
+  process.env.PI_CODING_AGENT_DIR = agent.agent
+  const handlers: Record<
+    string,
+    (event: unknown, ctx: unknown) => Promise<void>
+  > = {}
+  let commandHandler:
+    | ((args: string, ctx: unknown) => Promise<void>)
+    | undefined
+  const notices: string[] = []
+  const pi = {
+    on(name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) {
+      handlers[name] = handler
+    },
+    registerCommand(
+      _name: string,
+      command: { handler: typeof commandHandler },
+    ) {
+      commandHandler = command.handler
+    },
+    registerProvider() {
+      throw Object.assign(
+        new Error('private provider text /secret/profile/models.json'),
+        {
+          code: 'private-provider-code',
+        },
+      )
+    },
+  } as unknown as ExtensionAPI
+  const context = {
+    modelRegistry: {
+      getAll: () => [
+        { provider: servedProvider, id: 'm', api: 'openai-completions' },
+      ],
+    },
+    ui: { notify: (message: string) => notices.push(message) },
+    cwd: agent.agent,
+  } as unknown as ExtensionContext
+  createPiExtension({
+    createCore: (options) =>
+      createTestCore({ ...options, connect: async () => h.client }),
+  })(pi)
+  await handlers.session_start?.({}, context)
+  expect(notices).toHaveLength(1)
+  expect(notices[0]).toContain(
+    'could not register Pi providers from models.json',
+  )
+  expect(notices[0]).toContain(
+    'Check models.json for invalid or empty provider definitions, then restart Pi.',
+  )
+  expect(notices[0]).not.toMatch(/private|secret|profile|\bio\b/)
+  await commandHandler?.('status', context)
+  expect(notices[1]).toBe(notices[0])
+  await handlers.session_shutdown?.({}, context)
+})
+
 // One turn through the extension's own serving path, in this process: the
 // provider's streamSimple is what Pi calls, and `fetch` stands in for the
 // transport that sends to the provider. `withdraw` can make the vault refuse

@@ -20,6 +20,7 @@ import {
   resolveOpencodeStateDir,
 } from '../src/state-dir.ts'
 import { ReleasedFlags } from '../src/v1/flags.ts'
+import { opencode1Hosts } from '../src/v1/plugin.ts'
 import { productionDeps } from '../src/v2/vault.ts'
 import { scratchRoot } from './scratch-root.ts'
 
@@ -192,9 +193,46 @@ test('a foreign config-dir.json refuses with fixed text and is never replaced', 
     (error: Error) => error.message,
   )
   expect(refusal).toBe(
-    'claustrum-auth: state directory belongs to a different OpenCode config directory.',
+    'claustrum-auth did not start: could not bind config-dir.json to the OpenCode config folder. The state directory belongs to a different OpenCode config directory. Restore the matching config-folder setting or enroll the intended profile with setup, then restart OpenCode. Do not copy enrollment files between profiles.',
   )
   expect(JSON.parse(await readFile(manifest, 'utf8'))).toEqual(foreign)
+})
+
+test('both OpenCode startups name a config-dir.json read failure and remedy without exposing the profile path', async () => {
+  const { home, env } = await profile()
+  const options = {
+    ...env,
+    OPENCODE_CONFIG_DIR: path.join(home, 'private-profile'),
+  }
+  const dir = resolveOpencodeStateDir(options)
+  await mkdir(path.join(dir, 'config-dir.json'), { recursive: true })
+  for (const start of [
+    () =>
+      opencode1Hosts(
+        {
+          table: [],
+          env: () => options,
+          createCore: () => {
+            throw new Error('core must not start')
+          },
+        },
+        {} as Parameters<typeof opencode1Hosts>[1],
+      ),
+    () => productionDeps(options),
+  ]) {
+    const failure = await start().catch((error: Error) => error)
+    expect(failure).toBeInstanceOf(Error)
+    const message = (failure as Error).message
+    expect(message).toContain(
+      'could not read config-dir.json in the OpenCode claustrum-auth state folder',
+    )
+    expect(message).toContain(
+      'regular file owned by your user, then restart OpenCode',
+    )
+    expect(message).not.toContain(home)
+    expect(message).not.toContain('private-profile')
+    expect((failure as Error).cause).toBeUndefined()
+  }
 })
 
 test('the OpenCode 2 runtime shares enrollment and writes nothing under the config folder', async () => {

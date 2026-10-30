@@ -17,7 +17,7 @@ import { createPiExtension } from '../packages/pi/src/extension.ts'
 const dir = process.env.CLAUSTRUM_AUTH_E2E_DIR ?? ''
 const origin = process.env.CLAUSTRUM_AUTH_E2E_ORIGIN ?? ''
 const table = supportedProviders
-  .filter((e) => e.service === 'cerebras')
+  .filter((e) => e.service === 'cerebras' || e.service === 'meta')
   .map((e) => ({ ...e, origins: [origin] }))
 const client = fixtureClient(dir)
 const createCore: typeof createTestCore = (options) =>

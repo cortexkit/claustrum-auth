@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { startupRefusal, startupStep } from '@cortexkit/claustrum-auth-core'
 import { withLock, writeJsonAtomic } from '@cortexkit/common-auth/fs'
 
 type Env = Readonly<Record<string, string | undefined>>
@@ -48,9 +49,6 @@ function configIdentity(configDir: string): string {
   }
 }
 
-const bindingError =
-  'claustrum-auth: state directory belongs to a different OpenCode config directory.'
-
 /** Resolve the shared OpenCode 1/2 state without creating it (setup preview). */
 export function resolveOpencodeStateDir(
   env: Env = process.env,
@@ -79,38 +77,43 @@ export async function opencodeStateDir(
   const stateDir = resolveOpencodeStateDir(env, home)
   const manifest = path.join(stateDir, 'config-dir.json')
   // Serialize first use so two hosts cannot replace a binding they never read.
-  await withLock(
-    manifest,
-    { name: 'config-dir', ttlMs: 10_000, timeoutMs: 10_000, renew: true },
-    async (lock) => {
-      let contents: string
-      try {
-        contents = await readFile(manifest, 'utf8')
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        await writeJsonAtomic(
-          manifest,
-          { version: 1, configDir: identity },
-          { beforeRename: () => lock.assertOwned() },
+  await startupStep('opencode-state-lock', () =>
+    withLock(
+      manifest,
+      { name: 'config-dir', ttlMs: 10_000, timeoutMs: 10_000, renew: true },
+      async (lock) => {
+        let contents: string
+        try {
+          contents = await readFile(manifest, 'utf8')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+            throw startupRefusal('opencode-state-read', error)
+          await startupStep('opencode-state-write', () =>
+            writeJsonAtomic(
+              manifest,
+              { version: 1, configDir: identity },
+              { beforeRename: () => lock.assertOwned() },
+            ),
+          )
+          return
+        }
+        let binding: unknown
+        try {
+          binding = JSON.parse(contents)
+        } catch {
+          throw startupRefusal('opencode-binding')
+        }
+        if (
+          !binding ||
+          typeof binding !== 'object' ||
+          !('version' in binding) ||
+          binding.version !== 1 ||
+          !('configDir' in binding) ||
+          binding.configDir !== identity
         )
-        return
-      }
-      let binding: unknown
-      try {
-        binding = JSON.parse(contents)
-      } catch {
-        throw new Error(bindingError)
-      }
-      if (
-        !binding ||
-        typeof binding !== 'object' ||
-        !('version' in binding) ||
-        binding.version !== 1 ||
-        !('configDir' in binding) ||
-        binding.configDir !== identity
-      )
-        throw new Error(bindingError)
-    },
+          throw startupRefusal('opencode-binding')
+      },
+    ),
   )
   return stateDir
 }
