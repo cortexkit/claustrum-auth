@@ -25,6 +25,11 @@ class TransientApiError extends Error {}
 // `gh auth token`, so let the gh CLI make each read itself and report the HTTP
 // status from its `--include` output. A missing or refused gh reads as status
 // 0, which fails the check at once instead of retrying.
+/**
+ * @param {string} url
+ * @param {(file: string, args: string[], options: { encoding: 'utf8' }) => string} [run]
+ * @returns {Promise<Response>} only `ok`, `status` and `json` are provided
+ */
 export function ghCliFetch(url, run = execFileSync) {
   const { pathname, search } = new URL(url)
   let output
@@ -38,11 +43,15 @@ export function ghCliFetch(url, run = execFileSync) {
   const status = Number(/^HTTP\/\S+ (\d{3})/u.exec(output)?.[1] ?? 0)
   const separator = /\r?\n\r?\n/u.exec(output)
   const body = separator ? output.slice(separator.index).trim() : ''
-  return Promise.resolve({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => JSON.parse(body),
-  })
+  return Promise.resolve(
+    /** @type {Response} */ (
+      /** @type {unknown} */ ({
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => JSON.parse(body),
+      })
+    ),
+  )
 }
 
 export async function verifyReleaseCi({
