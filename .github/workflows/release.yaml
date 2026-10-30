@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-ci:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Require successful main-push CI on the tagged commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: node scripts/verify-release-ci.mjs --wait
+
+  publish-npm:
+    needs: verify-ci
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      # Node 24's bundled npm supports OIDC and provenance. Avoid independent npm
+      # upgrades, which can break the Sigstore dependency needed for provenance.
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - name: Verify committed versions match the tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" == v* ]]
+          node scripts/version-sync.mjs "${RELEASE_TAG#v}" --check
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - name: Publish both public packages with provenance
+        # npm Trusted Publishing (OIDC), configured separately for each package
+        # on npmjs.com. No NPM_TOKEN or NODE_AUTH_TOKEN secret is used.
+        run: |
+          set -euo pipefail
+          for workspace in packages/opencode packages/pi; do
+            package=$(node -p "require('./$workspace/package.json').name")
+            version=$(node -p "require('./$workspace/package.json').version")
+            if output=$(npm view "$package@$version" version --json 2>&1); then
+              echo "$package@$version is already published; skipping."
+            elif [[ "$output" == *E404* ]]; then
+              npm publish --workspace "$workspace" --provenance --access public
+            else
+              echo "$output" >&2
+              exit 1
+            fi
+          done
+
+  github-release:
+    needs: publish-npm
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --generate-notes
