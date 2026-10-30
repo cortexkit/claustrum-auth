@@ -14,8 +14,8 @@ Setup detects the hosts and registers the appropriate package: `@cortexkit/openc
 
 ## What it does
 
-- Reads provider credentials from the vault rather than offering a local sign-in or API-key store.
-- Offers ordered routing across vault accounts and account failover.
+- Reads provider keys from the vault. It offers no local sign-in and stores no provider key on disk; the host keeps only a placeholder that holds no secret.
+- Uses vault accounts in their set order, and moves to the next account when a provider answers 401 or 429.
 - Sends keys only as `Authorization: Bearer` to allowlisted provider origins.
 - Provides a `/claustrum` text menu for vault status, account order, provider ownership and refusal reasons.
 
@@ -38,7 +38,7 @@ The entries below come from the [provider table](packages/core/src/providers.ts)
 | OpenCode Zen | `opencode` | — | `opencode` |
 | Typesafe | Not in host catalog | Not in host catalog | — |
 
-Typesafe has an allowlist entry but is unavailable in the checked OpenCode catalogs. OpenCode 2 normally sends xAI over a guarded WebSocket handshake, not its HTTP request path; its HTTP fallback is also guarded. OpenCode Zen is not offered on OpenCode 2. [Provider details](docs/providers.md) records the catalog checks, exact origins, vault metadata and per-model restrictions.
+Typesafe has an allowlist entry, but the OpenCode 1 and OpenCode 2 catalogs checked for this release don't list it, so it can't be activated there until a catalog does. OpenCode 2 normally sends xAI over a guarded WebSocket handshake, not its HTTP request path; its HTTP fallback is also guarded. OpenCode Zen is not offered on OpenCode 2. [Provider details](docs/providers.md) records the catalog checks, exact origins, vault metadata and per-model restrictions.
 
 ## Documentation
 
