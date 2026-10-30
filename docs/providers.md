@@ -29,6 +29,15 @@ never part of it, so `https://api.deepseek.com` also admits
 `/v1/chat/completions`. `—` means the provider is not listed on that host, and
 a vault row for it there is refused as `not-on-this-host`.
 
+The table records allowlist mappings, not a promise that the running host's
+catalog offers a usable model. Typesafe is absent from the checked OpenCode
+catalogs and is therefore unavailable there; OpenCode 2 reports
+`unknown-to-host`. It is not offered on Pi either. OpenCode 2 uses a guarded
+WebSocket handshake for xAI
+by default, with a guarded HTTP fallback, rather than the ordinary HTTP path
+used by OpenCode 1 and Pi. OpenCode Zen is not offered on OpenCode 2. See the
+host rules below and the [landing-page availability table](../README.md#supported-providers).
+
 ### Fleet ids, not host ids
 
 A vault row's `provider_ids` use the fleet's vocabulary: the ids fleet routing
@@ -368,11 +377,11 @@ select the provider either.
 | `apikey:fireworks-ai` | `fireworks-ai` | `llm-provider` | `fireworks-ai` on OpenCode 1 and 2, `fireworks` on Pi |
 | `apikey:inception` | `inception` | `llm-provider` | inception on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
 | `apikey:openrouter` | `openrouter` | `llm-provider` | openrouter on every host |
-| `apikey:typesafe` | `typesafe` | `llm-provider` | typesafe on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
+| `apikey:typesafe` | `typesafe` | `llm-provider` | allowlisted on OpenCode 1 and 2, but unavailable in the checked catalogs; OpenCode 2 refuses `unknown-to-host`, Pi `not-on-this-host` |
 | `apikey:kimi-for-coding` | `kimi-code-plan-global` | `llm-provider` | `kimi-code-plan-global` on OpenCode 1 and 2, `kimi-coding` on Pi |
 | `apikey:cline-pass` | none | `llm-provider` | cline-pass on OpenCode 1 and 2, by its exact credential id; refused `not-on-this-host` on Pi |
 | `oauth:meta` | `meta` | `llm-provider,meta-native` | meta on every host, once the vault serves its expiry (above) |
-| `oauth:xai` | `xai` | `llm-provider,xai-native` | xai on every host; on OpenCode 2 over HTTP and in the WebSocket handshake |
+| `oauth:xai` | `xai` | `llm-provider,xai-native` | xai on every host; on OpenCode 2 over WebSocket by default, with guarded HTTP fallback |
 | `apikey:opencode-go` | `opencode-go` | `llm-provider` | opencode-go on every host, bearer models only |
 | `apikey:opencode-zen` | `opencode` | `llm-provider` | opencode on OpenCode 1 and Pi, bearer models only; refused `not-on-this-host` on OpenCode 2 |
 
@@ -392,7 +401,7 @@ Meta or xAI plugin exists, so these rows are served. When one is added, its
 provider id joins the reserved set (design section 10: "reviewed when a
 dedicated plugin is added"), and the rows then show as `reserved-provider`.
 
-## Before this table is live: the design's section 14.4 list
+## Support checks
 
 The table above is the shipped allowlist, and the design's "listing a provider
 as supported" rules (section 14.4) still apply per host:
@@ -404,8 +413,7 @@ as supported" rules (section 14.4) still apply per host:
    `experimental.ws.handshake` hook, audited in "xAI on OpenCode 2"),
    OpenCode 1's `options.fetch` and Pi's caller `fetch`. These drivers reach
    the key through the SDK's bearer option, which that seam sees; a per-host
-   audit of the pinned host versions is still owed before each entry is
-   called proven;
+   audit must cover the pinned host version before an entry is called proven;
 3. the driver and header match the table above;
 4. the origin is recorded and the wrong-origin case passes, on each host;
 5. the echoed-credential redaction case passes;

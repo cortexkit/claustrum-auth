@@ -1,50 +1,55 @@
-# claustrum-auth
+# CortexKit Claustrum Auth
 
-Serve credentials from a [Claustrum](https://github.com/cortexkit/claustrum) vault to OpenCode 1, OpenCode 2 and Pi, for providers that need no special request handling.
+CortexKit Claustrum Auth serves provider keys from a [Claustrum](https://github.com/cortexkit/claustrum) vault to OpenCode 1, OpenCode 2 and Pi, for providers that need no special request handling. It is vault-only; use the dedicated [openai-auth](https://github.com/cortexkit/openai-auth), [anthropic-auth](https://github.com/cortexkit/anthropic-auth) and [antigravity-auth](https://github.com/cortexkit/antigravity-auth) plugins for OpenAI/ChatGPT, Anthropic and Google Antigravity instead.
 
-Work in progress: nothing is published yet. The design is tracked in [cortexkit/common-auth#5](https://github.com/cortexkit/common-auth/issues/5).
+## Install
 
-## Setup and activation
-
-The claustrum-auth plugin is vault-only. Enrollment and grants belong to
-`ck auth`; provider activation happens inside the host, not in setup.
-No real provider is enabled yet. Setup previews show the generic activation
-form until a provider has passed its host's support checks.
-
-Once published, preview the setup plan without changing the profile:
+Quit OpenCode and Pi, then run:
 
 ```sh
-npx @cortexkit/opencode-claustrum-auth setup --dry-run --opencode=both
+npx @cortexkit/opencode-claustrum-auth setup
 ```
 
-Quit OpenCode and Pi, then run the same command with `--yes` instead of
-`--dry-run`. Setup uses common-auth's host detection, stopped-process fence,
-enrollment ceremony and registration. Vault mode is always enabled;
-`--claustrum` is accepted for compatibility and `--no-claustrum` is refused.
-`--host opencode` or `--host pi` limits the run (the equals form also works);
-`--enroll-only` skips host registration. Use `--help` to list supported flags.
-Approve each host's separate
-enrollment in `ck auth`. Setup prints the exact grant command and resolved
-state paths; enrollment alone does not grant credential access.
+Setup detects the hosts and registers the appropriate package: `@cortexkit/opencode-claustrum-auth` for OpenCode or `@cortexkit/pi-claustrum-auth` for Pi. Approve enrollment and grant access in `ck auth`, then follow the printed provider activation commands. See [setup and activation](docs/setup.md) for a dry run, host selection and the separate grant step.
 
-After granting access, run each printed activation command. OpenCode 1 and Pi
-use `/claustrum use <provider>` inside the host. Pi asks consent before moving
-an existing login aside. OpenCode 2 uses
-`opencode auth login <provider> --method claustrum-auth`. Setup never writes
-host credentials or starts a host server.
+## What it does
 
-## Text menu
+- Reads provider credentials from the vault rather than offering a local sign-in or API-key store.
+- Offers ordered routing across vault accounts and account failover.
+- Sends keys only as `Authorization: Bearer` to allowlisted provider origins.
+- Provides a `/claustrum` text menu for vault status, account order, provider ownership and refusal reasons.
 
-`/claustrum` displays vault authority, reachability, watch mode and outage
-receipts; provider ownership; accounts in routing order; the latest request
-placement/origin refusal; and refused vault rows with their classification
-codes. Pi also reports models hidden by the owned provider form.
+## Supported providers
 
-- `/claustrum status`, `/claustrum accounts`, `/claustrum refusals`: focused views.
-- `/claustrum reorder <provider> <route-id> ...`: include every route id from
-  the accounts view exactly once, in the desired order, including inactive
-  accounts. This changes the vault roster's routing preference, not credentials.
-- `/claustrum use <provider>` and `/claustrum release <provider>`: OpenCode 1
-  and Pi activation/release through their existing ownership safeguards.
+The entries below come from the [provider table](packages/core/src/providers.ts). Cells show the host's provider id; `—` means the plugin does not offer that provider on that host. Only models using bearer authentication are served, not every model in a provider's catalog.
 
-There are no local account-writing actions, quota display or TUI entry.
+| Provider | OpenCode 1 | OpenCode 2 | Pi |
+| --- | --- | --- | --- |
+| Cerebras | `cerebras` | `cerebras` | `cerebras` |
+| Cline Pass | `cline-pass` | `cline-pass` | — |
+| DeepSeek | `deepseek` | `deepseek` | `deepseek` |
+| Fireworks | `fireworks-ai` | `fireworks-ai` | `fireworks` |
+| Inception | `inception` | `inception` | — |
+| Kimi Code | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` |
+| OpenRouter | `openrouter` | `openrouter` | `openrouter` |
+| Meta | `meta` | `meta` | `meta` |
+| xAI | `xai` | `xai` (WebSocket by default) | `xai` |
+| OpenCode Go | `opencode-go` | `opencode-go` | `opencode-go` |
+| OpenCode Zen | `opencode` | — | `opencode` |
+| Typesafe | Not in host catalog | Not in host catalog | — |
+
+Typesafe has an allowlist entry but is unavailable in the checked OpenCode catalogs. OpenCode 2 normally sends xAI over a guarded WebSocket handshake, not its HTTP request path; its HTTP fallback is also guarded. OpenCode Zen is not offered on OpenCode 2. [Provider details](docs/providers.md) records the catalog checks, exact origins, vault metadata and per-model restrictions.
+
+## Documentation
+
+- [Setup and activation](docs/setup.md): enrollment, grants, host selection and activation.
+- [Commands](docs/commands.md): the `/claustrum` menu, account ordering and ownership.
+- [Providers](docs/providers.md): provider ids, host availability, origins and model restrictions.
+- [Security](docs/security.md): bearer-only placement, origin checks, redirects and key scrubbing.
+- [Troubleshooting](docs/troubleshooting.md): refusal messages and recovery steps.
+- [OpenCode 1](docs/opencode1.md), [OpenCode 2](docs/opencode2.md) and [Pi integration](docs/pi-spike.md): host-specific behaviour.
+- [Release](docs/release.md): packaging and publishing.
+
+## License
+
+MIT
