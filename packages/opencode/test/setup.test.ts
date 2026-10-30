@@ -134,11 +134,16 @@ test('test setup build enrolls once per host, discovers rows, prints provider ac
       'utf8',
     ),
   )
+  // Setup registers the package's own version. Read it from the manifest so a
+  // release's version bump doesn't fail this test.
+  const { version } = JSON.parse(
+    await readFile(path.join(import.meta.dir, '..', 'package.json'), 'utf8'),
+  ) as { version: string }
   expect(JSON.stringify(registration)).toContain(
-    '@cortexkit/opencode-claustrum-auth@0.0.0',
+    `@cortexkit/opencode-claustrum-auth@${version}`,
   )
   expect(JSON.stringify(h.commands)).toContain(
-    'npm:@cortexkit/pi-claustrum-auth@0.0.0',
+    `npm:@cortexkit/pi-claustrum-auth@${version}`,
   )
 })
 
