@@ -54,15 +54,19 @@ mkdir -p "$3/node_modules/.bin"
 cp pinned-bun "$3/node_modules/.bin/bun"`
 }`,
     )
+    // Git for Windows' Bash launcher prepends its own tools to PATH, which
+    // would hide these fakes. Put them first inside Bash, after it starts.
     const child = spawnSync(
       'bash',
-      ['scripts/gate.sh', ...(fast ? ['--fast'] : [])],
+      [
+        '-c',
+        'export PATH="$PWD/bin:$PATH"; exec bash scripts/gate.sh "$@"',
+        'gate-fixture',
+        ...(fast ? ['--fast'] : []),
+      ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`,
-        },
+        env: process.env,
         encoding: 'utf8',
         timeout: 5000,
       },
