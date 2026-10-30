@@ -43,23 +43,35 @@ export function parseWindowsProcesses(output: string): WindowsProcess[] {
   return result.processes
 }
 
+// The first CIM query in a process starts PowerShell's CIM stack cold. On
+// GitHub's Windows runners that took 1.2 to 13.8 s when common-auth measured
+// it, so a 10 s limit killed it on a slow runner. Later queries take well
+// under a second and keep the short limit.
+const COLD_QUERY_TIMEOUT_MS = 45_000
+const QUERY_TIMEOUT_MS = 10_000
+let cimWarm = false
+
 export function windowsProcesses(): Promise<WindowsProcess[]> {
+  const timeout = cimWarm ? QUERY_TIMEOUT_MS : COLD_QUERY_TIMEOUT_MS
   return new Promise((resolve, reject) => {
     execFile(
       'powershell.exe',
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', query],
       {
         encoding: 'utf8',
-        timeout: 10_000,
+        timeout,
         windowsHide: true,
         maxBuffer: 4 * 1024 * 1024,
       },
       (error, stdout, stderr) => {
         if (error)
           return reject(
-            new Error(`CIM process query failed: ${error.message}; ${stderr}`),
+            new Error(
+              `CIM process query failed${error.killed ? ` (killed after ${timeout} ms)` : ''}: ${error.message}; ${stderr}`,
+            ),
           )
         try {
+          cimWarm = true
           resolve(parseWindowsProcesses(stdout))
         } catch (error) {
           reject(error)
