@@ -318,20 +318,56 @@ esac
     directory,
     trace: () => readFileSync(trace, 'utf8'),
     execute: (args: string[], env = {}) =>
-      spawnSync('bash', ['scripts/release.sh', ...args], {
-        cwd: directory,
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${path.join(directory, 'bin')}${path.delimiter}${process.env.PATH}`,
-          TRACE: trace,
-          BRANCH: 'main',
-          REMOTE_HEAD: '1',
-          ...env,
+      // Git for Windows' Bash launcher prepends its own Git to PATH. Put the
+      // fixture shims first inside Bash, after the launcher has initialized it.
+      spawnSync(
+        'bash',
+        [
+          '-c',
+          'export PATH="$PWD/bin:$PATH"; exec bash scripts/release.sh "$@"',
+          'release-fixture',
+          ...args,
+        ],
+        {
+          cwd: directory,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            TRACE: trace,
+            BRANCH: 'main',
+            REMOTE_HEAD: '1',
+            ...env,
+          },
         },
-      }),
+      ),
   }
 }
+
+test('release fixture keeps its shims ahead of commands added by Bash startup', () => {
+  const fixture = releaseFixture()
+  put(
+    fixture.directory,
+    'startup-bin/git',
+    '#!/usr/bin/env bash\necho "Unexpected startup Git" >&2\nexit 97\n',
+    true,
+  )
+  put(
+    fixture.directory,
+    'bash-startup.sh',
+    // Model the native launcher adding Git before Bash runs the requested command.
+    'export PATH="$PWD/startup-bin:$PATH"\nunset BASH_ENV\necho "shell startup" >> "$TRACE"\n',
+  )
+  const result = fixture.execute(['0.1.0', '--dry'], {
+    BASH_ENV: path.join(fixture.directory, 'bash-startup.sh'),
+  })
+  expect(fixture.trace()).toStartWith('shell startup\n')
+  expect(result.stderr).toBe('')
+  expect(result.status).toBe(0)
+  expect(fixture.trace()).toContain(
+    'ci\nbun install --lockfile-only\ngate --fast',
+  )
+  expect(fixture.trace()).not.toMatch(/git (add|commit|tag|push)/u)
+})
 
 test('release refuses misspelled preview flags and every extra argument before doing anything', () => {
   const fixture = releaseFixture()
