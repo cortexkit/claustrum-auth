@@ -26,11 +26,22 @@ class TransientApiError extends Error {}
 // status from its `--include` output. A missing or refused gh reads as status
 // 0, which fails the check at once instead of retrying.
 /**
- * @param {string} url
+ * Returns a drop-in `fetchImpl` for `verifyReleaseCi`: it is called as
+ * `(url, init)`, ignores `init` (gh supplies its own headers and login), and
+ * resolves with a response carrying only `ok`, `status` and `json`.
  * @param {(file: string, args: string[], options: { encoding: 'utf8' }) => string} [run]
- * @returns {Promise<Response>} only `ok`, `status` and `json` are provided
+ * @returns {(url: string, init?: unknown) => Promise<Response>}
  */
-export function ghCliFetch(url, run = execFileSync) {
+export function ghCliFetcher(run = execFileSync) {
+  return (url) => ghCliRead(url, run)
+}
+
+/**
+ * @param {string} url
+ * @param {(file: string, args: string[], options: { encoding: 'utf8' }) => string} run
+ * @returns {Promise<Response>}
+ */
+function ghCliRead(url, run) {
   const { pathname, search } = new URL(url)
   let output
   try {
@@ -158,7 +169,7 @@ if (import.meta.main) {
     // Without a token the gh CLI authenticates each read; the placeholder only
     // satisfies the token check and is never sent.
     token: token || 'gh-cli',
-    ...(token ? {} : { fetchImpl: ghCliFetch }),
+    ...(token ? {} : { fetchImpl: ghCliFetcher() }),
     wait: process.argv.includes('--wait'),
   })
 }

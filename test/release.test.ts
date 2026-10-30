@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import {
-  ghCliFetch,
+  ghCliFetcher,
   requiredCiJobs,
   verifyReleaseCi,
 } from '../scripts/verify-release-ci.mjs'
@@ -248,9 +248,13 @@ test('local release CI reads through the gh CLI, never by extracting its token',
       if (fail) throw Object.assign(new Error('exit 1'), { stdout: output })
       return output
     }
-  const ok = await ghCliFetch(
-    'https://api.github.com/repos/cortexkit/claustrum-auth/actions/runs?head_sha=abc',
+  // verifyReleaseCi calls its fetchImpl as (url, init); the reader must take
+  // that shape and ignore init (a regression passed init as the gh runner).
+  const ok = await ghCliFetcher(
     gh('HTTP/2.0 200 OK\r\nX-Test: 1\r\n\r\n{"total_count":0}'),
+  )(
+    'https://api.github.com/repos/cortexkit/claustrum-auth/actions/runs?head_sha=abc',
+    { headers: { Authorization: 'Bearer gh-cli' } },
   )
   expect(calls).toEqual([
     [
@@ -262,21 +266,20 @@ test('local release CI reads through the gh CLI, never by extracting its token',
   ])
   expect(ok.status).toBe(200)
   expect(await ok.json()).toEqual({ total_count: 0 })
-  const missing = await ghCliFetch(
-    'https://api.github.com/repos/x/y',
+  const missing = await ghCliFetcher(
     gh('HTTP/2.0 404 Not Found\n\n{"message":"Not Found"}', true),
-  )
+  )('https://api.github.com/repos/x/y', {})
   expect([missing.ok, missing.status]).toEqual([false, 404])
   // A refused or absent gh has no status line and must fail, not retry.
-  const refused = await ghCliFetch(
+  const refused = await ghCliFetcher(gh('', true))(
     'https://api.github.com/repos/x/y',
-    gh('', true),
+    {},
   )
   expect([refused.ok, refused.status]).toEqual([false, 0])
   await expect(
     verifyReleaseCi({
       ...verifyOptions(),
-      fetchImpl: (url: string) => ghCliFetch(url, gh('', true)),
+      fetchImpl: ghCliFetcher(gh('', true)),
       wait: true,
     }),
   ).rejects.toThrow('HTTP 0')
