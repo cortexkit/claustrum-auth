@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import {
+  ghCliFetch,
   requiredCiJobs,
   verifyReleaseCi,
 } from '../scripts/verify-release-ci.mjs'
@@ -236,6 +237,55 @@ test('release CI fails immediately on 401 and 404, including job requests', asyn
       expect(client.count()).toBe(responses.length)
     }
   }
+})
+
+test('local release CI reads through the gh CLI, never by extracting its token', async () => {
+  const calls: string[][] = []
+  const gh =
+    (output: string, fail = false) =>
+    (command: string, args: string[]) => {
+      calls.push([command, ...args])
+      if (fail) throw Object.assign(new Error('exit 1'), { stdout: output })
+      return output
+    }
+  const ok = await ghCliFetch(
+    'https://api.github.com/repos/cortexkit/claustrum-auth/actions/runs?head_sha=abc',
+    gh('HTTP/2.0 200 OK\r\nX-Test: 1\r\n\r\n{"total_count":0}'),
+  )
+  expect(calls).toEqual([
+    [
+      'gh',
+      'api',
+      '--include',
+      '/repos/cortexkit/claustrum-auth/actions/runs?head_sha=abc',
+    ],
+  ])
+  expect(ok.status).toBe(200)
+  expect(await ok.json()).toEqual({ total_count: 0 })
+  const missing = await ghCliFetch(
+    'https://api.github.com/repos/x/y',
+    gh('HTTP/2.0 404 Not Found\n\n{"message":"Not Found"}', true),
+  )
+  expect([missing.ok, missing.status]).toEqual([false, 404])
+  // A refused or absent gh has no status line and must fail, not retry.
+  const refused = await ghCliFetch(
+    'https://api.github.com/repos/x/y',
+    gh('', true),
+  )
+  expect([refused.ok, refused.status]).toEqual([false, 0])
+  await expect(
+    verifyReleaseCi({
+      ...verifyOptions(),
+      fetchImpl: (url: string) => ghCliFetch(url, gh('', true)),
+      wait: true,
+    }),
+  ).rejects.toThrow('HTTP 0')
+  expect(
+    readFileSync(
+      path.join(import.meta.dir, '../scripts/verify-release-ci.mjs'),
+      'utf8',
+    ),
+  ).not.toContain("'auth', 'token'")
 })
 
 test('release CI waits for the bump commit and times out rather than publishing without CI', async () => {

@@ -21,6 +21,30 @@ export const requiredCiJobs = [
 
 class TransientApiError extends Error {}
 
+// A local release has no token in its environment. Some managed shells refuse
+// `gh auth token`, so let the gh CLI make each read itself and report the HTTP
+// status from its `--include` output. A missing or refused gh reads as status
+// 0, which fails the check at once instead of retrying.
+export function ghCliFetch(url, run = execFileSync) {
+  const { pathname, search } = new URL(url)
+  let output
+  try {
+    output = run('gh', ['api', '--include', `${pathname}${search}`], {
+      encoding: 'utf8',
+    })
+  } catch (error) {
+    output = typeof error?.stdout === 'string' ? error.stdout : ''
+  }
+  const status = Number(/^HTTP\/\S+ (\d{3})/u.exec(output)?.[1] ?? 0)
+  const separator = /\r?\n\r?\n/u.exec(output)
+  const body = separator ? output.slice(separator.index).trim() : ''
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => JSON.parse(body),
+  })
+}
+
 export async function verifyReleaseCi({
   sha,
   token,
@@ -117,15 +141,15 @@ if (import.meta.main) {
     process.argv.length > 3
   )
     throw new Error('Usage: verify-release-ci.mjs [--wait]')
-  const token =
-    process.env.GH_TOKEN ||
-    process.env.GITHUB_TOKEN ||
-    execFileSync('gh', ['auth', 'token'], { encoding: 'utf8' }).trim()
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
   await verifyReleaseCi({
     sha: process.env.TARGET_SHA,
     repository: process.env.GITHUB_REPOSITORY,
     apiUrl: process.env.GITHUB_API_URL,
-    token,
+    // Without a token the gh CLI authenticates each read; the placeholder only
+    // satisfies the token check and is never sent.
+    token: token || 'gh-cli',
+    ...(token ? {} : { fetchImpl: ghCliFetch }),
     wait: process.argv.includes('--wait'),
   })
 }
