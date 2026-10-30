@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Linux coverage from .github/workflows/ci.yml; requires Node 24 and Bun from .mise.toml.
+# Linux coverage from .github/workflows/ci.yml; requires Node 24; full mode pins Bun via .mise.toml.
 # CI-only: macOS/Windows matrices for check, setup-menu, pi-e2e, opencode1-e2e,
 # opencode2-e2e; Windows-only pi-windows-private-files (both Windows images,
 # including standard-user provisioning, ACL denial probes and cleanup).
-# Checkout/setup-node/mise-action are prerequisites, not local checkout mutations.
+# Checkout/setup-node are prerequisites; full mode bootstraps Bun if needed.
 # Each Linux job installs frozen dependencies; one shared install suffices here.
 # check: install -> build -> typecheck -> lint -> unit -> ignored-file check.
 # The ignored-file check moves into --fast; the other check commands keep CI order.
@@ -50,6 +50,32 @@ ignored_files() {
   tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
   test -z "$tracked" || { printf '%s\n' "$tracked"; return 1; }
 }
+
+if [[ $fast != --fast ]]; then
+  step=toolchain
+  pinned_bun=$(sed -n 's/^bun = "\([^"]*\)"$/\1/p' .mise.toml)
+  if [[ -z "$pinned_bun" ]]; then
+    printf 'Cannot read the Bun pin from .mise.toml.\n' >&2
+    exit 1
+  fi
+  bun_version=$(bun --version 2>/dev/null || true)
+  if [[ $bun_version != "$pinned_bun" ]]; then
+    tools="$PWD/target/scratch/gate-tools"
+    printf 'Bun on PATH is %s; fetching pinned Bun %s into %s.\n' "${bun_version:-unavailable}" "$pinned_bun" "$tools"
+    if ! npm install --prefix "$tools" --no-save --package-lock=false "bun@$pinned_bun"; then
+      printf 'Cannot obtain pinned Bun %s: npm install failed in %s (see npm output above).\n' "$pinned_bun" "$tools" >&2
+      exit 1
+    fi
+    export PATH="$tools/node_modules/.bin:$PATH"
+    hash -r
+    bun_version=$(bun --version 2>/dev/null || true)
+  fi
+  if [[ $bun_version != "$pinned_bun" ]]; then
+    printf 'Cannot use pinned Bun %s: selected Bun reports %s.\n' "$pinned_bun" "${bun_version:-unavailable}" >&2
+    exit 1
+  fi
+  printf 'Using Bun %s (%s).\n' "$bun_version" "$(command -v bun)"
+fi
 
 # Do not inherit opt-ins from an operator's shell: CI scopes them per suite.
 # Live smoke and the Windows second-user probe are not Linux CI steps.
