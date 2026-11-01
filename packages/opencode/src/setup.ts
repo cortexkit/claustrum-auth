@@ -107,7 +107,14 @@ export async function runClaustrumSetup(
     },
     beforeSignIn: async (host, context) => {
       if (context.mode !== 'claustrum') throw new Error(vaultOnlyMessage)
-      if (host === 'opencode') await opencodeStateDir(env, home)
+      if (host === 'opencode') {
+        await opencodeStateDir(env, home)
+        if (
+          env.OPENCODE_CLAUSTRUM_AUTH_STATE_DIR?.trim() &&
+          argv.includes('--enroll-only')
+        )
+          print(`State directory: ${states.opencode}`)
+      }
     },
     signInLocal: async () => {
       throw new Error(vaultOnlyMessage)

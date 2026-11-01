@@ -183,6 +183,66 @@ test('two different config folders have different keys, even before they exist',
   expect(await stat(configDir).catch(() => undefined)).toBeUndefined()
 })
 
+test('an explicit state override shares one folder across different homes, config folders and XDG roots without binding', async () => {
+  const first = await profile()
+  const second = await profile()
+  const shared = path.join(first.root, 'shared state')
+  const options = (profile: typeof first) => ({
+    ...profile.env,
+    XDG_CONFIG_HOME: path.join(profile.root, 'config'),
+    OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: `  ${shared}\t`,
+  })
+  expect(resolveOpencodeStateDir(options(first), first.home)).toBe(shared)
+  expect(resolveOpencodeStateDir(options(second), second.home)).toBe(shared)
+  expect(await opencodeStateDir(options(first), first.home)).toBe(shared)
+  expect(await stat(shared).catch(() => undefined)).toBeUndefined()
+  const manifest = path.join(shared, 'config-dir.json')
+  const foreign = { version: 1, configDir: 'another-config-folder' }
+  await writeJsonAtomic(manifest, foreign)
+  expect(await opencodeStateDir(options(second), second.home)).toBe(shared)
+  expect(JSON.parse(await readFile(manifest, 'utf8'))).toEqual(foreign)
+})
+
+test('a relative state override resolves exactly to an absolute folder without a config suffix', async () => {
+  const { root, home, env } = await profile()
+  const expected = path.join(root, 'relative state')
+  const options = {
+    ...env,
+    OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: path.relative(process.cwd(), expected),
+  }
+  expect(resolveOpencodeStateDir(options, home)).toBe(expected)
+  expect(path.isAbsolute(await opencodeStateDir(options, home))).toBe(true)
+  expect(await stat(expected).catch(() => undefined)).toBeUndefined()
+})
+
+test.each([undefined, '', ' \t\n'])(
+  'an unset or blank state override (%j) preserves the derived path and binding',
+  async (override) => {
+    const { root, home, env } = await profile()
+    const configDir = path.join(root, 'custom-config')
+    const options = {
+      ...env,
+      OPENCODE_CONFIG_DIR: configDir,
+      OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: override,
+    }
+    const identity = path.join(realpathSync.native(root), 'custom-config')
+    const key = `opencode-${createHash('sha256').update(identity).digest('hex').slice(0, 16)}`
+    const expected = path.join(
+      env.XDG_STATE_HOME,
+      'cortexkit',
+      'claustrum-auth',
+      key,
+    )
+    expect(resolveOpencodeStateDir(options, home)).toBe(expected)
+    expect(await opencodeStateDir(options, home)).toBe(expected)
+    expect(
+      JSON.parse(
+        await readFile(path.join(expected, 'config-dir.json'), 'utf8'),
+      ),
+    ).toEqual({ version: 1, configDir: identity })
+  },
+)
+
 test('a foreign config-dir.json refuses with fixed text and is never replaced', async () => {
   const { home, env } = await profile()
   const dir = await opencodeStateDir(env, home)
