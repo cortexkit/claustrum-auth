@@ -60,10 +60,20 @@ details and the host source they rest on.
 
 ## Several accounts
 
-Accounts are tried in roster order. A 429 sets the account aside until its
-`retry-after` (or for 60 seconds), and the host's retry moves the turn to the
-next account before any output. A session that has used both the vault and
-another credential for the same provider keeps the host's own retry decisions
+Accounts are tried in roster order. A confirmed empty-balance 402 from
+DeepSeek or OpenRouter sets the account aside for five minutes; a 429 sets it
+aside for 60 seconds. On HTTP, `Retry-After` overrides either default. Other
+402s stay with the user and do not mark the account. xAI WebSocket error
+frames have no confirmed balance rule, so a 402 does not move the request to
+another account there.
+
+The host's retry moves the turn only before output and only when another
+eligible account exists. When every account is marked, a fresh request tries
+the first account again instead of waiting for all marks to expire. This
+probe lets an account with new funds recover without a restart.
+
+A session that has used both the vault and another credential for the same
+provider keeps the host's own retry decisions
 for the rest of its life (common-auth's mixed-ownership rule). A 401 is
 reported to the vault only for the key that this host was served for that
 request.

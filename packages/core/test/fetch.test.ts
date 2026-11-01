@@ -9,6 +9,8 @@ import {
 } from '../test-entry.ts'
 import { bearer, harness, placeholder, row } from './fakes.ts'
 
+const balanceEntry = { ...fixtureEntries[0], service: 'deepseek' }
+
 test('never report not-mine or refused rows through either core serving path', async () => {
   const excluded = [
     row('chatgpt', { authMethod: 'chatgpt' }),
@@ -231,6 +233,11 @@ test('stream body replays across 429 accounts and 401 rotation with fresh physic
 })
 
 for (const [label, statuses, expectedStatus, lastBody] of [
+  ['all 402', [402, 402], 402, 'last'],
+  ['401 then 402', [401, 402], 402, 'last'],
+  ['402 then 401', [402, 401], 401, 'last'],
+  ['402 then 429', [402, 429], 429, 'accounts-rate-limited'],
+  ['429 then 402', [429, 402], 429, 'accounts-rate-limited'],
   ['all 429', [429, 429], 429, 'last'],
   ['all 401', [401, 401], 401, 'last'],
   ['429 then 401', [429, 401], 429, 'accounts-rate-limited'],
@@ -241,7 +248,7 @@ for (const [label, statuses, expectedStatus, lastBody] of [
     const cancellations = [0, 0]
     let sends = 0
     const fetch = createFetch({
-      entry: fixtureEntries[0],
+      entry: balanceEntry,
       placeholder,
       consumer: h.consumer,
       now: () => 1000,
@@ -279,8 +286,24 @@ for (const [label, statuses, expectedStatus, lastBody] of [
     expect(text).toContain(lastBody)
     expect(text).not.toContain('secret-')
     expect(response.headers.get('retry-after')).toBe('17')
-    expect(cancellations).toEqual([1, label === '429 then 401' ? 1 : 0])
+    expect(cancellations).toEqual([
+      1,
+      lastBody === 'accounts-rate-limited' ? 1 : 0,
+    ])
     expect(sends).toBe(2)
+    if (label.includes('402'))
+      expect(
+        h.reports.map(({ credentialId, providerStatus }) => ({
+          credentialId,
+          providerStatus,
+        })),
+      ).toEqual(
+        statuses.flatMap((status, index) =>
+          status === 401
+            ? [{ credentialId: index ? 'b' : 'a', providerStatus: 401 }]
+            : [],
+        ),
+      )
   })
 }
 
@@ -579,6 +602,234 @@ test('body representations are buffered once and replayed with content type inta
     expect(bodies[1]).toBe(bodies[0])
     expect(types[1]).toBe(types[0])
   }
+})
+
+test('402 moves to account B and keeps its mark until Retry-After or the balance probe interval expires', async () => {
+  for (const [retryAfter, expiry] of [
+    [undefined, 301000],
+    ['invalid', 301000],
+    ['7200', 7201000],
+    ['17', 18000],
+    ['Thu, 01 Jan 1970 00:00:11 GMT', 11000],
+    ['0', 1000],
+  ] as const) {
+    const h = await harness([row('a'), row('b')])
+    const marks = new Map<string, number>()
+    let time = 1000
+    let sends = 0
+    const fetch = createFetch({
+      entry: balanceEntry,
+      placeholder,
+      consumer: h.consumer,
+      now: () => time,
+      rateLimitMarks: marks,
+      fetch: async () => {
+        sends++
+        return new Response(sends === 1 ? 'insufficient balance' : 'served B', {
+          status: sends === 1 ? 402 : 200,
+          headers: retryAfter ? { 'retry-after': retryAfter } : {},
+        })
+      },
+    })
+    const response = await fetch('https://fixture.invalid', { headers: bearer })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('served B')
+    expect(h.reads).toEqual(['a', 'b'])
+    expect(h.reports).toEqual([])
+    expect([...marks.values()]).toEqual([expiry])
+    if (expiry > time) {
+      await fetch('https://fixture.invalid', { headers: bearer })
+      expect(h.reads.at(-1)).toBe('b')
+    }
+    time = expiry + 1
+    await fetch('https://fixture.invalid', { headers: bearer })
+    expect(h.reads.at(-1)).toBe('a')
+  }
+})
+
+for (const [service, body, moves] of [
+  ['deepseek', 'Insufficient Balance', true],
+  [
+    'openrouter',
+    '{"error":{"metadata":{"limit_source":"openrouter_credits"}}}',
+    true,
+  ],
+  [
+    'openrouter',
+    '{ "error": { "metadata": { "limit_source": "openrouter_key_limit" } } }',
+    false,
+  ],
+  [
+    'openrouter',
+    '{"error":{"metadata":{"limit_source":"openrouter_in_flight_budget"}}}',
+    false,
+  ],
+  [
+    'openrouter',
+    '{"error":{"metadata":{"limit_source":"openrouter_credits","reason":"weight_exceeds_budget"}}}',
+    false,
+  ],
+  ['openrouter', '{"error":{"message":"Insufficient credits"}}', false],
+  ['openrouter', 'not JSON', false],
+  [
+    'xai',
+    '{"error":{"metadata":{"limit_source":"openrouter_credits"}}}',
+    false,
+  ],
+] as const) {
+  test(`402 classification ${service} ${body} moves=${moves}`, async () => {
+    const h = await harness([row('a'), row('b')])
+    const marks = new Map<string, number>()
+    let sends = 0
+    const fetch = createFetch({
+      entry: { ...fixtureEntries[0], service },
+      placeholder,
+      consumer: h.consumer,
+      rateLimitMarks: marks,
+      fetch: async () => {
+        sends++
+        return sends === 1
+          ? new Response(body, { status: 402 })
+          : new Response('served B')
+      },
+    })
+    const response = await fetch('https://fixture.invalid', { headers: bearer })
+    expect(response.status).toBe(moves ? 200 : 402)
+    expect(await response.text()).toBe(moves ? 'served B' : body)
+    expect(h.reads).toEqual(moves ? ['a', 'b'] : ['a'])
+    expect(marks.size).toBe(moves ? 1 : 0)
+    expect(h.reports).toEqual([])
+  })
+}
+
+for (const status of [200, 402]) {
+  test(`balance probe ${status === 200 ? 'success clears' : 'failure renews'} the mark without a restart`, async () => {
+    const h = await harness([row('a'), row('b')])
+    const marks = new Map<string, number>()
+    const route = h.consumer.routingRows()[0].id
+    let time = 1000
+    let sends = 0
+    const fetch = createFetch({
+      entry: balanceEntry,
+      placeholder,
+      consumer: h.consumer,
+      rateLimitMarks: marks,
+      now: () => time,
+      fetch: async () => {
+        sends++
+        return new Response('balance probe', {
+          status: sends === 1 ? 402 : sends === 3 ? status : 200,
+        })
+      },
+    })
+    await fetch('https://fixture.invalid', { headers: bearer })
+    time = 301001
+    await fetch('https://fixture.invalid', { headers: bearer })
+    expect(h.reads.slice(0, 3)).toEqual(['a', 'b', 'a'])
+    if (status === 200) expect(marks.has(route)).toBe(false)
+    else {
+      expect(marks.get(route)).toBe(601001)
+      await fetch('https://fixture.invalid', { headers: bearer })
+      expect(h.reads.at(-1)).toBe('b')
+      time = 601002
+      await fetch('https://fixture.invalid', { headers: bearer })
+      expect(h.reads.at(-1)).toBe('a')
+      expect(marks.has(route)).toBe(false)
+    }
+    expect(h.reports).toEqual([])
+  })
+}
+
+test('an all-marked balance account recovers on a fresh request after expiry', async () => {
+  const h = await harness()
+  const marks = new Map<string, number>()
+  let time = 1000
+  let sends = 0
+  const fetch = createFetch({
+    entry: balanceEntry,
+    placeholder,
+    consumer: h.consumer,
+    rateLimitMarks: marks,
+    now: () => time,
+    fetch: async () =>
+      new Response('probe', { status: ++sends === 1 ? 402 : 200 }),
+  })
+  expect(
+    (await fetch('https://fixture.invalid', { headers: bearer })).status,
+  ).toBe(402)
+  time = 2000
+  const limited = await fetch('https://fixture.invalid', { headers: bearer })
+  expect(limited.status).toBe(429)
+  expect(limited.headers.get('retry-after')).toBe('299')
+  expect(sends).toBe(1)
+  time = 301001
+  expect(
+    (await fetch('https://fixture.invalid', { headers: bearer })).status,
+  ).toBe(200)
+  expect(sends).toBe(2)
+  expect(marks.size).toBe(0)
+})
+
+test('a balance probe that hits a key cap returns its body without a mark', async () => {
+  const h = await harness([row('a'), row('b')])
+  const marks = new Map<string, number>()
+  let time = 1000
+  let sends = 0
+  const body = '{"error":{"metadata":{"limit_source":"openrouter_key_limit"}}}'
+  const fetch = createFetch({
+    entry: { ...fixtureEntries[0], service: 'openrouter' },
+    placeholder,
+    consumer: h.consumer,
+    rateLimitMarks: marks,
+    now: () => time,
+    fetch: async () => {
+      sends++
+      if (sends === 2) return new Response('served B')
+      return new Response(
+        sends === 1
+          ? '{"error":{"metadata":{"limit_source":"openrouter_credits"}}}'
+          : body,
+        { status: 402 },
+      )
+    },
+  })
+  await fetch('https://fixture.invalid', { headers: bearer })
+  time = 301001
+  const response = await fetch('https://fixture.invalid', { headers: bearer })
+  expect(response.status).toBe(402)
+  expect(await response.text()).toBe(body)
+  expect(h.reads).toEqual(['a', 'b', 'a'])
+  expect(marks.size).toBe(0)
+})
+
+test('an unconfirmed 402 body and headers still redact the served credential', async () => {
+  const h = await harness([row('a'), row('b')])
+  const marks = new Map<string, number>()
+  const fetch = createFetch({
+    entry: { ...fixtureEntries[0], service: 'openrouter' },
+    placeholder,
+    consumer: h.consumer,
+    rateLimitMarks: marks,
+    fetch: async () =>
+      Response.json(
+        {
+          error: {
+            message: 'secret-a-1',
+            metadata: { limit_source: 'openrouter_key_limit' },
+          },
+        },
+        { status: 402, headers: { 'x-echo': 'secret-a-1' } },
+      ),
+  })
+  const response = await fetch('https://fixture.invalid', { headers: bearer })
+  expect(response.status).toBe(402)
+  const text = await response.text()
+  expect(text).toContain('openrouter_key_limit')
+  expect(text).not.toContain('secret-a-1')
+  expect(response.headers.get('x-echo')).not.toContain('secret-a-1')
+  expect(h.reads).toEqual(['a'])
+  expect(marks.size).toBe(0)
+  expect(h.reports).toEqual([])
 })
 
 test('429 marks persist across calls until numeric date or default expiry', async () => {

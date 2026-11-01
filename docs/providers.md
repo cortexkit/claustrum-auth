@@ -253,9 +253,12 @@ same-origin, and the second origin never sees the key.
 
 **Frames.** Received frames pass the plugin's `experimental.ws.receive` hook,
 which removes every key served into that socket from error frames before the
-host's driver reads them. Error frames carry the provider's status: a 429 is
-a limit on the account (the retry moves the turn to the next account, on a
-new socket), a 401 is reported once for the receipt that socket was served.
+host's driver reads them. A 429 error frame limits the account for 60 seconds
+with the `rate-limit` reason. Before output, the retry can move the turn to
+another eligible account on a new socket. After output, it cannot reroute.
+xAI has no confirmed balance rule, so its 402 frames stay with the user and
+do not mark the account. A 401 is reported once for the receipt that socket
+was served.
 
 **Voice.** Grok Voice does not use these hooks. The host's voice service
 looks for an `env` or `key` connection of the `xai` integration and needs a

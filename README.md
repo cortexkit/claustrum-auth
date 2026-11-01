@@ -15,7 +15,7 @@ Setup detects the hosts and registers the appropriate package: `@cortexkit/openc
 ## What it does
 
 - Reads provider keys from the vault. It offers no local sign-in and stores no provider key on disk; the host keeps only a placeholder that holds no secret.
-- Uses vault accounts in their set order, and moves to the next account when a provider answers 401 or 429.
+- Uses vault accounts in their set order, and moves to the next account on 401, 429 or a confirmed empty-balance 402 from DeepSeek or OpenRouter.
 - Sends keys only as `Authorization: Bearer` to allowlisted provider origins.
 - Provides a `/claustrum` text menu for vault status, account order, provider ownership and refusal reasons.
 
