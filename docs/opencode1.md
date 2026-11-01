@@ -60,11 +60,29 @@ is determined from the home directory, not `XDG_CONFIG_HOME`.
 Paths that resolve to the same real config folder share state, including
 aliases of the default folder.
 
-The state folder holds the enrollment token and state, rosters, activation
-flags and an owner-only `config-dir.json` binding it to the config folder's
-identity. The plugin refuses a binding for another config folder rather than
-sharing its state. It writes no plugin runtime files under OpenCode's config
-folder. No old state is migrated.
+The derived state folder holds the enrollment token and state, rosters,
+activation flags and an owner-only `config-dir.json` binding it to the config
+folder's identity. The plugin refuses a binding for another config folder
+rather than sharing its state. It writes no plugin runtime files under
+OpenCode's config folder. No old state is migrated.
+
+For many OpenCode hosts with separate homes or config folders that need to
+share one approved enrollment, set `OPENCODE_CLAUSTRUM_AUTH_STATE_DIR` to the
+same folder in setup and every host's environment. A non-empty value is
+trimmed and resolved to an absolute path (relative to the process's working
+directory if needed), and that exact folder is used: no
+`cortexkit/claustrum-auth/<key>` suffix or config-folder hash is added. An
+unset or blank value keeps the derived path above.
+
+The override deliberately shares state, so it neither creates nor checks a
+`config-dir.json` binding. Common-auth's existing enrollment and roster write
+paths still enforce folder permissions: `0700` on POSIX and private-directory
+checks on Windows. Resolving the override alone does not create the folder.
+Setup (including `--enroll-only` and `--dry-run`) prints the override path.
+Every host sharing it shares one vault principal and one revocation: revoking
+that enrollment revokes access for all of them. This variable applies only to
+OpenCode 1, OpenCode 2 and their setup; Pi still uses
+`getAgentDir()/claustrum-auth`.
 
 ## Real-host tests
 

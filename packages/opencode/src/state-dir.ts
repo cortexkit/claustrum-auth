@@ -54,6 +54,8 @@ export function resolveOpencodeStateDir(
   env: Env = process.env,
   home = homedir(),
 ): string {
+  const override = env.OPENCODE_CLAUSTRUM_AUTH_STATE_DIR?.trim()
+  if (override) return path.resolve(override)
   const configDir = opencodeConfigDir(env, home)
   const identity = configIdentity(configDir)
   const key =
@@ -68,11 +70,19 @@ export function resolveOpencodeStateDir(
   )
 }
 
-/** Resolves and binds the shared OpenCode 1/2 state before any runtime writes. */
+/** Resolves OpenCode 1/2 state and binds derived folders before runtime writes. */
 export async function opencodeStateDir(
   env: Env = process.env,
   home = homedir(),
 ): Promise<string> {
+  if (env.OPENCODE_CLAUSTRUM_AUTH_STATE_DIR?.trim()) {
+    const stateDir = resolveOpencodeStateDir(env, home)
+    if (!stateDir || !path.isAbsolute(stateDir))
+      throw startupRefusal('opencode-start')
+    // An explicit override deliberately shares enrollment across config folders;
+    // binding it to one config folder would refuse every other host.
+    return stateDir
+  }
   const identity = configIdentity(opencodeConfigDir(env, home))
   const stateDir = resolveOpencodeStateDir(env, home)
   const manifest = path.join(stateDir, 'config-dir.json')

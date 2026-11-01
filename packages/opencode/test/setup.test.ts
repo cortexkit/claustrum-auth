@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import {
   enrollmentAuthority,
@@ -84,6 +84,156 @@ test('published setup dry run names both enrollments, exact grants and native ac
   expect(cli.status).toBe(1)
   expect(cli.stderr).toContain('Unknown setup argument: --not-a-setup-flag')
 })
+
+test('published setup dry run prints the exact OpenCode state override without changing Pi or writing files', async () => {
+  const root = await profile()
+  const stateDir = path.join(root, 'shared enrollment')
+  const h = setupIO(root, {
+    OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: ` ${stateDir}\t`,
+  })
+  const bin = path.join(import.meta.dir, '..', 'dist', 'setup-bin.js')
+  const built = (await import(bin)) as {
+    runClaustrumSetup: typeof runClaustrumSetup
+  }
+  await built.runClaustrumSetup(['setup', '--dry-run', '--opencode=both'], h.io)
+  expect(h.output()).toContain(stateDir)
+  expect(h.output()).toContain(
+    path.join(h.env.PI_CODING_AGENT_DIR, 'claustrum-auth'),
+  )
+  expect(h.output()).not.toContain(path.join(root, 'state', 'cortexkit'))
+  expect(h.proposals).toEqual([])
+  expect(existsSync(stateDir)).toBe(false)
+  expect(existsSync(path.join(root, 'state'))).toBe(false)
+  expect(existsSync(path.join(root, 'config'))).toBe(false)
+  expect(existsSync(path.join(root, 'pi'))).toBe(false)
+})
+
+test.each([false, true])(
+  'setup enrolls in the OpenCode state override (enroll-only: %j)',
+  async (enrollOnly) => {
+    const root = await profile()
+    const stateDir = path.join(root, 'shared enrollment')
+    const h = setupIO(root, {
+      OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: stateDir,
+    })
+    await (await setupTestBuild())(
+      [
+        'setup',
+        '--yes',
+        '--host=opencode',
+        '--opencode=both',
+        ...(enrollOnly ? ['--enroll-only'] : []),
+      ],
+      h.io,
+      fixtureEntries,
+      async () => ({
+        async listScoped() {
+          return { rows: [], view: 'empty', grants: 0, grantTuples: [] }
+        },
+        async getScoped() {
+          throw new Error('setup must not read credential material')
+        },
+        async reportAuthFailureScoped() {},
+        close() {},
+      }),
+    )
+    expect(h.proposals).toEqual(['claustrum-auth-opencode'])
+    expect(h.output()).toContain(stateDir)
+    const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+    expect(await enrollmentAuthority(paths, 'claustrum-auth-opencode')).toBe(
+      'vault',
+    )
+    expect(existsSync(path.join(stateDir, 'config-dir.json'))).toBe(false)
+    expect(existsSync(path.join(root, 'state'))).toBe(false)
+    expect(existsSync(path.join(root, 'pi', 'claustrum-auth'))).toBe(false)
+  },
+)
+
+test.skipIf(process.platform === 'win32')(
+  'setup tightens a 0755 OpenCode override to 0700 before enrollment and roster secrets are written',
+  async () => {
+    const root = await profile()
+    const stateDir = path.join(root, 'shared enrollment')
+    await mkdir(stateDir)
+    await chmod(stateDir, 0o755)
+    expect((await stat(stateDir)).mode & 0o777).toBe(0o755)
+    const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+    const h = setupIO(root, { OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: stateDir })
+    let proposed = false
+    let polled = false
+    h.io.connect = async () => ({
+      async enrollPropose({ name }) {
+        proposed = true
+        expect((await stat(stateDir)).mode & 0o777).toBe(0o700)
+        expect(existsSync(paths.tokenPath)).toBe(false)
+        expect((await stat(paths.statePath)).mode & 0o777).toBe(0o600)
+        return { requestId: name }
+      },
+      async enrollPoll({ requestId }) {
+        polled = true
+        expect((await stat(stateDir)).mode & 0o777).toBe(0o700)
+        expect(existsSync(paths.tokenPath)).toBe(false)
+        return {
+          status: 'approved',
+          name: requestId,
+          token: '01'.repeat(32),
+          tokenGeneration: 1,
+        }
+      },
+      close() {},
+    })
+    await runClaustrumSetup(
+      ['setup', '--yes', '--enroll-only', '--host=opencode'],
+      h.io,
+    )
+    expect(proposed).toBe(true)
+    expect(polled).toBe(true)
+    expect((await stat(stateDir)).mode & 0o777).toBe(0o700)
+    expect((await stat(paths.tokenPath)).mode & 0o777).toBe(0o600)
+    expect((await stat(paths.statePath)).mode & 0o777).toBe(0o600)
+    expect(await enrollmentAuthority(paths, 'claustrum-auth-opencode')).toBe(
+      'vault',
+    )
+    const built = createTestCore({
+      stateDir: resolveOpencodeStateDir(h.env, root),
+      tokenPath: paths.tokenPath,
+      isCustodyActive: async () =>
+        (await enrollmentAuthority(paths, 'claustrum-auth-opencode')) ===
+        'vault',
+      facts: { host: 'opencode1', catalog: ['fixture-a'] },
+      connect: async () => ({
+        async listScoped() {
+          expect((await stat(stateDir)).mode & 0o777).toBe(0o700)
+          expect(
+            (await stat(path.dirname(built.hub.rosterPath('fixture-a')))).mode &
+              0o777,
+          ).toBe(0o700)
+          return {
+            rows: [row('a')],
+            view: 'override',
+            grants: 1,
+            grantTuples: [],
+          }
+        },
+        async getScoped() {
+          throw new Error('discovery must not read credential material')
+        },
+        async reportAuthFailureScoped() {},
+        close() {},
+      }),
+    })
+    try {
+      await built.hub.refresh()
+      const rosterPath = built.hub.rosterPath('fixture-a')
+      expect(built.consumers.get('fixture-a')?.routingRows()).toHaveLength(1)
+      expect((await stat(stateDir)).mode & 0o777).toBe(0o700)
+      expect((await stat(path.dirname(rosterPath))).mode & 0o777).toBe(0o700)
+      expect((await stat(rosterPath)).mode & 0o777).toBe(0o600)
+    } finally {
+      await built.hub.dispose()
+    }
+  },
+)
 
 test('test setup build enrolls once per host, discovers rows, prints provider activation and preserves host credentials', async () => {
   const root = await profile()
