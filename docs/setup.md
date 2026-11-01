@@ -43,6 +43,9 @@ approval and grant commands and the resolved state paths. Enrollment alone
 does not grant credential access: follow the printed grant command for the
 `llm-provider` category before activating a provider.
 
+Approve each additional instance of OpenCode or Pi with its own `--name`, and
+use that same name in the grant's `--principal enrolled:<name>`.
+
 OpenCode and Pi use separate enrolled principals. A successful enrollment or
 grant for one is not a grant for the other. Keep credential creation and
 login refresh in the vault; the plugin consumes the served keys.
