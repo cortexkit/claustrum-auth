@@ -124,6 +124,13 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://openrouter.ai'],
   },
   {
+    service: 'synthetic',
+    ids: ['synthetic'],
+    hosts: { opencode1: 'synthetic', opencode2: 'synthetic' },
+    class: 'A',
+    origins: ['https://api.synthetic.new'],
+  },
+  {
     // OpenCode only: Pi registers `typesafe` with its `typesafe-system-one`
     // api, which does not take a caller fetch, so the plugin's fetch never
     // sees a typesafe request there.

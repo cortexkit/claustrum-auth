@@ -17,6 +17,7 @@ vault row must look like for the provider to be served.
 | inception | `inception` | `inception` | `inception` | — | `https://api.inceptionlabs.ai` |
 | kimi-coding | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` | `https://api.kimi.com`, `https://api.kimi.ai` |
 | openrouter | `openrouter` | `openrouter` | `openrouter` | `openrouter` | `https://openrouter.ai` |
+| synthetic | `synthetic` | `synthetic` | `synthetic` | — | `https://api.synthetic.new` |
 | typesafe | `typesafe` | `typesafe` | `typesafe` | — | `https://api.typesafe.ai` |
 | meta | `meta` | `meta` | `meta` | `meta` | `https://api.meta.ai` |
 | xai | `xai` | `xai` | `xai` | `xai` | `https://api.x.ai`; WebSocket handshake on OpenCode 2: `wss://api.x.ai` |
@@ -97,6 +98,7 @@ pins, which carry the catalogs the hosts themselves use:
 | inception | absent from Pi's catalog | `providers/openai-compatible.js` with the catalog's `api.inceptionlabs.ai` base | yes (OpenAI-compatible bearer) |
 | kimi-coding | `kimi-coding`, base `https://api.kimi.com/coding/v1`, `openai-completions` | `providers/moonshot/chat.js` (the host routes `kimi-code-plan-global` through it); the catalog supplies the regional base | yes |
 | openrouter | `openrouter`, base `https://openrouter.ai/api/v1` | `providers/openrouter.js`, base `https://openrouter.ai/api/v1` | yes |
+| synthetic | no registration in pi-ai 1.3.0 `dist/providers/all.js` | `providers/openai-compatible.js:11`, `AuthOptions.bearer`, catalog base `https://api.synthetic.new/openai/v1` | yes |
 | typesafe | `typesafe`, base `https://api.typesafe.ai/v1/`, api `typesafe-system-one` | `providers/typesafe-ai.js`, base `https://api.typesafe.ai/v1`, `AuthOptions.bearer` | OpenCode yes; Pi's api does not take a caller `fetch` |
 | meta | `meta` (`providers/meta.js`), base `https://api.meta.ai/v1`, `openai-responses`, 6 models | `providers/meta.js`, base `https://api.meta.ai/v1`; responses, chat and messages routes all use `AuthOptions.bearer(input, "META_API_KEY")` | yes |
 | xai | `xai` (`providers/xai.js`), base `https://api.x.ai/v1`, `openai-responses`, 4 models | `providers/xai.js`, base `https://api.x.ai/v1`, `AuthOptions.bearer(options, "XAI_API_KEY")`; WebSocket transport by default on OpenCode 2 (below) | yes, over HTTP and in the WebSocket handshake |
@@ -104,6 +106,20 @@ pins, which carry the catalogs the hosts themselves use:
 | opencode-zen | `opencode` (`providers/opencode.js`), five apis, models at `https://opencode.ai/inference` (see below) | `providers/opencode.js` (TypeSafe System One at `https://opencode.ai/inference/systemone/v1`, bearer) plus per-model drivers | per model |
 
 Host rules that follow:
+
+- **Synthetic is OpenCode only.** The [models.dev catalog](https://models.dev/api.json),
+  read 2026-11-01T09:50:41Z, lists `synthetic` at `$.synthetic` with 12 models.
+  Its package is `npm: @ai-sdk/openai-compatible`.
+  Its base URL is `https://api.synthetic.new/openai/v1`. OpenCode 2.2.0's
+  [snapshot](https://github.com/anomalyco/opencode/blob/1097e2668b1e08ad63bdf0b1c4860b9bc01e420c/packages/core/src/models-dev/snapshot.txt)
+  lists the same provider and 12 models. Each model uses
+  `api.chat-completions.base_url: https://api.synthetic.new/openai/v1` and
+  `sdk.opencodeai: @opencode/ai/providers/openai-compatible`.
+  That driver's bearer authentication is recorded below. The
+  [built-in provider plugins at v2.2.0](https://github.com/anomalyco/opencode/tree/1097e2668b1e08ad63bdf0b1c4860b9bc01e420c/packages/core/src/plugin/provider)
+  contain no Synthetic plugin. Pi-ai 1.3.0's `dist/providers/all.js` has no
+  Synthetic registration, so Pi refuses its row as `not-on-this-host`.
+  The allowlist contains only `https://api.synthetic.new`.
 
 - **Kimi Code's provider id is `kimi-code-plan-global`, not its model id.**
   The OpenCode 1 models.dev catalog (`https://models.dev/api.json`, read
@@ -377,6 +393,7 @@ select the provider either.
 | `apikey:fireworks-ai` | `fireworks-ai` | `llm-provider` | `fireworks-ai` on OpenCode 1 and 2, `fireworks` on Pi |
 | `apikey:inception` | `inception` | `llm-provider` | inception on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
 | `apikey:openrouter` | `openrouter` | `llm-provider` | openrouter on every host |
+| `apikey:synthetic` | `synthetic` | `llm-provider` | synthetic on OpenCode 1 and 2. Pi refuses `not-on-this-host` |
 | `apikey:typesafe` | `typesafe` | `llm-provider` | allowlisted on OpenCode 1 and 2, but unavailable in the checked catalogs; OpenCode 2 refuses `unknown-to-host`, Pi `not-on-this-host` |
 | `apikey:kimi-for-coding` | `kimi-code-plan-global` | `llm-provider` | `kimi-code-plan-global` on OpenCode 1 and 2, `kimi-coding` on Pi |
 | `apikey:cline-pass` | none | `llm-provider` | cline-pass on OpenCode 1 and 2, by its exact credential id; refused `not-on-this-host` on Pi |

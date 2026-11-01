@@ -32,6 +32,7 @@ The entries below come from the [provider table](packages/core/src/providers.ts)
 | Inception | `inception` | `inception` | — |
 | Kimi Code | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` |
 | OpenRouter | `openrouter` | `openrouter` | `openrouter` |
+| Synthetic | `synthetic` | `synthetic` | — |
 | Meta | `meta` | `meta` | `meta` |
 | xAI | `xai` | `xai` (WebSocket by default) | `xai` |
 | OpenCode Go | `opencode-go` | `opencode-go` | `opencode-go` |

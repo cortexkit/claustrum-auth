@@ -70,6 +70,14 @@ const vaultRows: {
     expected: () => ({ kind: 'mine', member: 'openrouter' }),
   },
   {
+    credential: 'apikey:synthetic',
+    providerIds: ['synthetic'],
+    expected: (host) =>
+      host === 'pi'
+        ? { kind: 'refused', code: 'not-on-this-host' }
+        : { kind: 'mine', member: 'synthetic' },
+  },
+  {
     // The fleet id names Kimi's coding plan; each host has its own id for it.
     credential: 'apikey:kimi-for-coding',
     providerIds: ['kimi-code-plan-global'],
@@ -147,6 +155,7 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     'inception',
     'kimi-coding',
     'openrouter',
+    'synthetic',
     'typesafe',
     'meta',
     'xai',
@@ -182,6 +191,7 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     inception: 'inception',
     'kimi-coding': 'kimi-code-plan-global',
     openrouter: 'openrouter',
+    synthetic: 'synthetic',
     typesafe: 'typesafe',
     meta: 'meta',
     xai: 'xai',
@@ -219,6 +229,7 @@ test('each shipped origin is the provider API host, and no other host of it is a
     inception: ['https://api.inceptionlabs.ai'],
     'kimi-coding': ['https://api.kimi.com', 'https://api.kimi.ai'],
     openrouter: ['https://openrouter.ai'],
+    synthetic: ['https://api.synthetic.new'],
     typesafe: ['https://api.typesafe.ai'],
     meta: ['https://api.meta.ai'],
     xai: ['https://api.x.ai'],
@@ -239,6 +250,55 @@ test('the operator vault rows route to their provider on every host, and nowhere
     }
   }
 })
+
+test.each(hosts)(
+  'Synthetic on %s serves only its exact origin or refuses the absent host',
+  async (host) => {
+    const item = vaultRows.find(
+      (item) => item.credential === 'apikey:synthetic',
+    )
+    if (!item) throw new Error('missing Synthetic vault row')
+    expect(
+      classifyRow(facts(item), publishedFacts(host, ['synthetic'])),
+    ).toEqual(item.expected(host))
+    if (host === 'pi') return
+    const h = await liveHarness(
+      [row(item.credential, { providerIds: item.providerIds })],
+      host,
+    )
+    const entry = tableByService.get('synthetic')
+    const consumer = h.consumers.get('synthetic')
+    if (!entry || !consumer) throw new Error('missing Synthetic member')
+    let sends = 0
+    const fetch = createFetch({
+      entry,
+      consumer,
+      placeholder,
+      fetch: async (input) => {
+        expect((input as Request).headers.get('authorization')).toBe(
+          `Bearer ${h.secretOf(item.credential)}`,
+        )
+        sends++
+        return new Response('ok')
+      },
+    })
+    expect(
+      await (
+        await fetch('https://api.synthetic.new/openai/v1/chat/completions', {
+          headers: bearer,
+        })
+      ).text(),
+    ).toBe('ok')
+    const reads = h.reads.length
+    await expect(
+      fetch('https://api.synthetic.new.evil/openai/v1/chat/completions', {
+        headers: bearer,
+      }),
+    ).rejects.toMatchObject({ code: 'origin-refused' })
+    expect(h.reads).toHaveLength(reads)
+    expect(sends).toBe(1)
+  },
+)
 
 test('cline-pass is served by its exact credential id only while the row has no provider id', () => {
   const cline = vaultRows.find(

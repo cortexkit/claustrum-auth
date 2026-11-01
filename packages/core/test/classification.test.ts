@@ -43,7 +43,7 @@ function fact(
   }
 }
 
-test('31 inventory rows classify per host without parsing credential ids', () => {
+test('32 inventory rows classify per host without parsing credential ids', () => {
   const rows: {
     value: VaultRowFacts
     expected: (host: Host) => ReturnType<typeof classifyRow>
@@ -89,6 +89,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
     'inception',
     'kimi-code-plan-global',
     'openrouter',
+    'synthetic',
     'typesafe',
     'cloudflare-workers-ai',
     'opencode-go',
@@ -100,7 +101,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
         if (
           (host === 'opencode2' && id === 'opencode') ||
           (host === 'pi' &&
-            ['cline-pass', 'inception', 'typesafe'].includes(id))
+            ['cline-pass', 'inception', 'synthetic', 'typesafe'].includes(id))
         )
           return { kind: 'refused', code: 'not-on-this-host' }
         // Rows carry fleet ids; two services have other ids on the hosts.
@@ -115,7 +116,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
       },
     })
   }
-  expect(rows).toHaveLength(31)
+  expect(rows).toHaveLength(32)
   for (const host of hosts)
     for (const item of rows)
       expect(classifyRow(item.value, facts(host), catalogEntries)).toEqual(
@@ -252,6 +253,7 @@ test('reserved matrix never admits reserved providers alone or beside others', (
     'inception',
     'kimi-coding',
     'openrouter',
+    'synthetic',
     'typesafe',
     'meta',
     'xai',
