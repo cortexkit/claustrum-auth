@@ -43,7 +43,7 @@ function fact(
   }
 }
 
-test('31 inventory rows classify per host without parsing credential ids', () => {
+test('32 inventory rows classify per host without parsing credential ids', () => {
   const rows: {
     value: VaultRowFacts
     expected: (host: Host) => ReturnType<typeof classifyRow>
@@ -88,6 +88,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
     'fireworks-ai',
     'inception',
     'kimi-code-plan-global',
+    'minimax-coding-plan',
     'openrouter',
     'typesafe',
     'cloudflare-workers-ai',
@@ -98,6 +99,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
       value: fact([id]),
       expected: (host) => {
         if (
+          (host !== 'opencode2' && id === 'minimax-coding-plan') ||
           (host === 'opencode2' && id === 'opencode') ||
           (host === 'pi' &&
             ['cline-pass', 'inception', 'typesafe'].includes(id))
@@ -115,7 +117,7 @@ test('31 inventory rows classify per host without parsing credential ids', () =>
       },
     })
   }
-  expect(rows).toHaveLength(31)
+  expect(rows).toHaveLength(32)
   for (const host of hosts)
     for (const item of rows)
       expect(classifyRow(item.value, facts(host), catalogEntries)).toEqual(
@@ -251,6 +253,7 @@ test('reserved matrix never admits reserved providers alone or beside others', (
     'fireworks',
     'inception',
     'kimi-coding',
+    'minimax-coding-plan',
     'openrouter',
     'typesafe',
     'meta',

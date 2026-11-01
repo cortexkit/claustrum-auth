@@ -79,6 +79,7 @@ Command per provider (the method id is `claustrum-auth`):
 | inception | `opencode auth login inception --method claustrum-auth` |
 | cline-pass | `opencode auth login cline-pass --method claustrum-auth` |
 | kimi-coding | `opencode auth login kimi-code-plan-global --method claustrum-auth` |
+| minimax-coding-plan | `opencode auth login minimax-coding-plan --method claustrum-auth` |
 | openrouter | `opencode auth login openrouter --method claustrum-auth` |
 | typesafe | `opencode auth login typesafe --method claustrum-auth` |
 | meta | `opencode auth login meta --method claustrum-auth` |
@@ -133,6 +134,7 @@ a slash command, because OpenCode 1 has one auth hook per provider:
 | inception | `/claustrum use inception` |
 | cline-pass | `/claustrum use cline-pass` |
 | kimi-coding | `/claustrum use kimi-code-plan-global` |
+| minimax-coding-plan | Not served: `not-on-this-host` (driver sends `x-api-key`) |
 | openrouter | `/claustrum use openrouter` |
 | typesafe | `/claustrum use typesafe` |
 | meta | `/claustrum use meta` |
@@ -174,9 +176,11 @@ Command per provider (Pi's own ids):
 | opencode-go | `/claustrum use opencode-go` |
 | opencode-zen | `/claustrum use opencode` |
 
-typesafe, inception and cline-pass are not listed on Pi: Pi's catalog has no
-inception or cline-pass provider at all, and it registers typesafe with an api
-that does not go through the plugin's fetch (`docs/providers.md`).
+typesafe, inception, cline-pass and minimax-coding-plan are not listed on Pi:
+Pi's catalog has no inception or cline-pass provider at all, and it registers
+typesafe with an api that does not go through the plugin's fetch
+(`docs/providers.md`). For MiniMax, it registers only `minimax` and `minimax-cn`,
+not `minimax-coding-plan`.
 
 Steps, per provider:
 

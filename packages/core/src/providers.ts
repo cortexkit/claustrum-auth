@@ -113,6 +113,14 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.kimi.com', 'https://api.kimi.ai'],
   },
   {
+    // OpenCode 1 sends x-api-key; Pi does not register this provider.
+    service: 'minimax-coding-plan',
+    ids: ['minimax-coding-plan'],
+    hosts: { opencode2: 'minimax-coding-plan' },
+    class: 'A',
+    origins: ['https://api.minimax.io'],
+  },
+  {
     service: 'openrouter',
     ids: ['openrouter'],
     hosts: {

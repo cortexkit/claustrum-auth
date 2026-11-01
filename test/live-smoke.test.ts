@@ -100,6 +100,25 @@ describe('live smoke safety', () => {
     expect(matrix('pi')).not.toContain('cline-pass')
     expect(matrix('opencode2')).toContain('opencode-zen')
   })
+  test('MiniMax Token Plan smoke selects OpenCode 2 only', () => {
+    expect(matrix('opencode2')).toContain('minimax-coding-plan')
+    expect(matrix('opencode1')).not.toContain('minimax-coding-plan')
+    expect(matrix('pi')).not.toContain('minimax-coding-plan')
+    const home = mkdtempSync(path.join(scratch, 'minimax-'))
+    const env = {
+      LIVE_HOME: home,
+      CLAUSTRUM_SUBC_CONNECTION: '/read-only/connection.json',
+    }
+    for (const host of ['all', 'opencode2'])
+      expect(
+        options(['--host', host, '--provider', 'minimax-coding-plan'], env)
+          .hosts,
+      ).toEqual(['opencode2'])
+    for (const host of ['opencode1', 'pi'])
+      expect(() =>
+        options(['--host', host, '--provider', 'minimax-coding-plan'], env),
+      ).toThrow(`ProviderNotListed:${host}`)
+  })
   test('selects lowest catalog price and excludes Anthropic from bearer-only providers', () => {
     expect(
       cheapest(

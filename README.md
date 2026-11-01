@@ -31,6 +31,7 @@ The entries below come from the [provider table](packages/core/src/providers.ts)
 | Fireworks | `fireworks-ai` | `fireworks-ai` | `fireworks` |
 | Inception | `inception` | `inception` | — |
 | Kimi Code | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` |
+| MiniMax Token Plan | — | `minimax-coding-plan` | — |
 | OpenRouter | `openrouter` | `openrouter` | `openrouter` |
 | Meta | `meta` | `meta` | `meta` |
 | xAI | `xai` | `xai` (WebSocket by default) | `xai` |

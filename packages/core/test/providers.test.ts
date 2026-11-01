@@ -70,6 +70,14 @@ const vaultRows: {
     expected: () => ({ kind: 'mine', member: 'openrouter' }),
   },
   {
+    credential: 'apikey:minimax-coding-plan',
+    providerIds: ['minimax-coding-plan'],
+    expected: (host) =>
+      host === 'opencode2'
+        ? { kind: 'mine', member: 'minimax-coding-plan' }
+        : { kind: 'refused', code: 'not-on-this-host' },
+  },
+  {
     // The fleet id names Kimi's coding plan; each host has its own id for it.
     credential: 'apikey:kimi-for-coding',
     providerIds: ['kimi-code-plan-global'],
@@ -146,6 +154,7 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     'fireworks',
     'inception',
     'kimi-coding',
+    'minimax-coding-plan',
     'openrouter',
     'typesafe',
     'meta',
@@ -191,7 +200,10 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
   // OpenCode Zen's stored credential is read by the host's Console plugin
   // outside the request hooks.
   const { 'opencode-zen': _zen, ...opencode2 } = hostIds('opencode1')
-  expect(hostIds('opencode2')).toEqual(opencode2)
+  expect(hostIds('opencode2')).toEqual({
+    ...opencode2,
+    'minimax-coding-plan': 'minimax-coding-plan',
+  })
   // Pi registers a provider only through pi-ai's bearer apis, so the services
   // Pi's own catalog does not offer as bearer providers are OpenCode only.
   expect(hostIds('pi')).toEqual({
@@ -218,6 +230,7 @@ test('each shipped origin is the provider API host, and no other host of it is a
     fireworks: ['https://api.fireworks.ai'],
     inception: ['https://api.inceptionlabs.ai'],
     'kimi-coding': ['https://api.kimi.com', 'https://api.kimi.ai'],
+    'minimax-coding-plan': ['https://api.minimax.io'],
     openrouter: ['https://openrouter.ai'],
     typesafe: ['https://api.typesafe.ai'],
     meta: ['https://api.meta.ai'],
