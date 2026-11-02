@@ -100,6 +100,23 @@ describe('live smoke safety', () => {
     expect(matrix('pi')).not.toContain('cline-pass')
     expect(matrix('opencode2')).toContain('opencode-zen')
   })
+  test('Synthetic smoke is selectable on both OpenCode hosts but not Pi', () => {
+    const home = mkdtempSync(path.join(scratch, 'synthetic-'))
+    const env = {
+      LIVE_HOME: home,
+      CLAUSTRUM_SUBC_CONNECTION: path.join(home, 'connection.json'),
+    }
+    expect(matrix('opencode1')).toContain('synthetic')
+    expect(matrix('opencode2')).toContain('synthetic')
+    expect(matrix('pi')).not.toContain('synthetic')
+    expect(options(['--provider', 'synthetic'], env)).toMatchObject({
+      hosts: ['opencode1', 'opencode2'],
+      provider: 'synthetic',
+    })
+    expect(() =>
+      options(['--host', 'pi', '--provider', 'synthetic'], env),
+    ).toThrow('ProviderNotListed:pi')
+  })
   test('selects lowest catalog price and excludes Anthropic from bearer-only providers', () => {
     expect(
       cheapest(

@@ -80,6 +80,7 @@ Command per provider (the method id is `claustrum-auth`):
 | cline-pass | `opencode auth login cline-pass --method claustrum-auth` |
 | kimi-coding | `opencode auth login kimi-code-plan-global --method claustrum-auth` |
 | openrouter | `opencode auth login openrouter --method claustrum-auth` |
+| synthetic | `opencode auth login synthetic --method claustrum-auth` |
 | typesafe | `opencode auth login typesafe --method claustrum-auth` |
 | meta | `opencode auth login meta --method claustrum-auth` |
 | xai | `opencode auth login xai --method claustrum-auth` |
@@ -134,6 +135,7 @@ a slash command, because OpenCode 1 has one auth hook per provider:
 | cline-pass | `/claustrum use cline-pass` |
 | kimi-coding | `/claustrum use kimi-code-plan-global` |
 | openrouter | `/claustrum use openrouter` |
+| synthetic | `/claustrum use synthetic` |
 | typesafe | `/claustrum use typesafe` |
 | meta | `/claustrum use meta` |
 | xai | `/claustrum use xai` |
@@ -174,9 +176,9 @@ Command per provider (Pi's own ids):
 | opencode-go | `/claustrum use opencode-go` |
 | opencode-zen | `/claustrum use opencode` |
 
-typesafe, inception and cline-pass are not listed on Pi: Pi's catalog has no
-inception or cline-pass provider at all, and it registers typesafe with an api
-that does not go through the plugin's fetch (`docs/providers.md`).
+typesafe, inception, cline-pass and synthetic are not listed on Pi: Pi's catalog
+has no inception, cline-pass or synthetic provider at all, and it registers
+typesafe with an api that does not go through the plugin's fetch (`docs/providers.md`).
 
 Steps, per provider:
 

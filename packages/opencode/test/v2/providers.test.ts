@@ -116,7 +116,7 @@ test('xai is served into its WebSocket handshake to wss://api.x.ai only, and a l
 // Windows. A failure now also names the provider that broke.
 //
 // Each test's own work is the first sign-in, where the hub commits one
-// owner-only roster per listed provider (11 for the shipped table). Measured
+// owner-only roster per listed provider (12 for the shipped table). Measured
 // on a Windows Server 2022 build machine: about 1 s per test, 0.9 s of it
 // in that sign-in (about 80 ms per roster commit, against about 6 ms for one
 // private file write); GitHub's windows-latest once ran the xai test past
