@@ -46,10 +46,14 @@ provider is vault-owned. See [provider details](providers.md).
   each send, and limits the redirect chain. It does not follow a cross-origin
   redirect or a redirect URL containing the served key.
 - **OpenCode 2 HTTP:** the plugin checks the request's origin before key
-  replacement, then uses the host's HTTP transport. In the pinned host,
-  cross-origin redirects can reach the other origin, but without the served
-  bearer; same-origin redirects retain it. This protection depends on the
-  host's redirect behaviour, not the plugin's manual redirect loop.
+  replacement, then uses the host's HTTP transport, which follows redirects.
+  OpenCode 2.2.0 drops the plugin's request to handle redirects manually, and
+  no plugin hook can restore it. A cross-origin redirect reaches the other
+  origin without the `Authorization` header, and a same-origin redirect keeps
+  it. If the provider puts the served key in the redirect address itself, that
+  address carries the key to the other origin. Only an allowlisted provider
+  can send such a redirect, and it already holds the key. The plugin cannot
+  prevent this on OpenCode 2 until the host keeps the redirect setting.
 - **OpenCode 2 xAI WebSocket:** the plugin checks the handshake against the
   separate `wss://api.x.ai` allowlist before reading the vault, and checks that
   the URL has not changed before writing the key. The pinned host follows no
