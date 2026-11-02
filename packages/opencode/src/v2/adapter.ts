@@ -172,18 +172,26 @@ export function inspectResponsesFrame(
   try {
     event = JSON.parse(data)
   } catch {
-    return undefined
+    return { outputStarted: true }
   }
-  if (!isRecord(event)) return undefined
+  if (!isRecord(event)) return { outputStarted: true }
   const type =
     typeof event.type === 'string'
       ? event.type
       : event.error != null
         ? 'error'
         : undefined
-  if (type === undefined) return undefined
+  // Only known envelopes are safe to replay. response.output_text.done can
+  // publish text without a delta; reasoning, tool calls and unfamiliar
+  // frames may likewise have already produced host output.
+  if (
+    type === 'response.created' ||
+    type === 'response.in_progress' ||
+    type?.startsWith('codex.')
+  )
+    return undefined
   if (type === 'response.completed' || type === 'response.incomplete')
-    return { done: true }
+    return { done: true, outputStarted: true }
   if (type === 'error' || type === 'response.failed') {
     const status = frameStatus(event)
     if (attempt && status !== undefined) attempt.frameStatus = status
@@ -197,9 +205,7 @@ export function inspectResponsesFrame(
         : {}),
     }
   }
-  if (type.startsWith('response.') && type.endsWith('.delta'))
-    return { outputStarted: true }
-  return undefined
+  return { outputStarted: true }
 }
 
 export interface VaultAdapterOptions {

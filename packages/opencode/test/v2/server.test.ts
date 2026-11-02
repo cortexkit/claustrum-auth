@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
+import { inspectResponsesFrame } from '../../src/v2/adapter.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { phaseClock } from '../phase-clock.ts'
 import {
@@ -533,6 +534,81 @@ test('a handshake URL moved after the origin check is refused, and the key never
   // The read already happened for the URL that was checked.
   expect(vault.reads).toEqual(['a1'])
   clock.done()
+})
+
+test('WebSocket output markers exclude only envelope and error frames', () => {
+  for (const type of [
+    'response.created',
+    'response.in_progress',
+    'codex.rate_limits',
+    'codex.future_event',
+  ])
+    expect(inspectResponsesFrame(JSON.stringify({ type }), undefined)).toBe(
+      undefined,
+    )
+  for (const type of ['error', 'response.failed'])
+    expect(
+      inspectResponsesFrame(JSON.stringify({ type, status: 429 }), undefined),
+    ).toEqual({
+      error: 'the provider answered with an error frame',
+      limit: { reason: 'rate-limit', status: 429 },
+    })
+  for (const type of [
+    'response.output_item.added',
+    'response.output_text.done',
+    'response.reasoning_text.done',
+    'response.function_call_arguments.done',
+    'response.output_text.delta',
+    'response.completed',
+    'response.incomplete',
+    'future.output',
+  ])
+    expect(
+      inspectResponsesFrame(JSON.stringify({ type }), undefined)?.outputStarted,
+    ).toBe(true)
+  for (const frame of ['{}', 'null', 'not JSON'])
+    expect(inspectResponsesFrame(frame, undefined)?.outputStarted).toBe(true)
+})
+
+test('done-only WebSocket output prevents a 429 retry from moving to another account', async () => {
+  const { host, vault } = await startServer({
+    table: socketTable,
+    rows: [row('a1'), row('a2')],
+  })
+  await login(host, 'fixture-a')
+  const s = scope('fixture-a')
+  const opened = await handshake(host, 'fixture-a', socketURL, s)
+  expect(opened.headers.authorization).toBe('Bearer secret-a1-1')
+  for (const frame of [
+    { type: 'response.created', response: { id: 'resp_1' } },
+    {
+      type: 'response.output_item.added',
+      item: { type: 'message', id: 'msg_1' },
+    },
+    {
+      type: 'response.output_text.done',
+      item_id: 'msg_1',
+      text: 'Already produced',
+    },
+    {
+      type: 'error',
+      status: 429,
+      error: { code: 'rate_limit_exceeded', message: 'slow down' },
+    },
+  ])
+    await receive(host, s, JSON.stringify(frame))
+  const retry = await trigger(host, 'retry', {
+    sessionID: s.sessionID,
+    agent: s.agent,
+    model: s.model,
+    error: { type: 'provider.rate-limit', message: 'rate', status: 429 },
+    attempt: 1,
+    decision: { retry: true, delay: 120_000 } as
+      | { retry: true; delay: number }
+      | { retry: false },
+  })
+  expect(retry.decision).toEqual({ retry: false })
+  expect(vault.reads).toEqual(['a1'])
 })
 
 test('a 429 error frame marks the account and the next handshake goes to the next one; a 401 error frame is reported once', async () => {
