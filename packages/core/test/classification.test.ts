@@ -88,6 +88,7 @@ test('32 inventory rows classify per host without parsing credential ids', () =>
     'fireworks-ai',
     'inception',
     'kimi-code-plan-global',
+    'minimax-coding-plan',
     'openrouter',
     'synthetic',
     'typesafe',
@@ -99,6 +100,7 @@ test('32 inventory rows classify per host without parsing credential ids', () =>
       value: fact([id]),
       expected: (host) => {
         if (
+          (host !== 'opencode2' && id === 'minimax-coding-plan') ||
           (host === 'opencode2' && id === 'opencode') ||
           (host === 'pi' &&
             ['cline-pass', 'inception', 'synthetic', 'typesafe'].includes(id))
@@ -252,6 +254,7 @@ test('reserved matrix never admits reserved providers alone or beside others', (
     'fireworks',
     'inception',
     'kimi-coding',
+    'minimax-coding-plan',
     'openrouter',
     'synthetic',
     'typesafe',

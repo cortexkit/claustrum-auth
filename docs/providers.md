@@ -16,6 +16,7 @@ vault row must look like for the provider to be served.
 | fireworks | `fireworks-ai` | `fireworks-ai` | `fireworks-ai` | `fireworks` | `https://api.fireworks.ai` |
 | inception | `inception` | `inception` | `inception` | — | `https://api.inceptionlabs.ai` |
 | kimi-coding | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` | `https://api.kimi.com`, `https://api.kimi.ai` |
+| minimax-coding-plan | `minimax-coding-plan` | — | `minimax-coding-plan` | — | `https://api.minimax.io` |
 | openrouter | `openrouter` | `openrouter` | `openrouter` | `openrouter` | `https://openrouter.ai` |
 | synthetic | `synthetic` | `synthetic` | `synthetic` | — | `https://api.synthetic.new` |
 | typesafe | `typesafe` | `typesafe` | `typesafe` | — | `https://api.typesafe.ai` |
@@ -82,7 +83,7 @@ pins, which carry the catalogs the hosts themselves use:
   `openai-responses` is not listed there.
 - **OpenCode 2** `@opencode/ai` 2.2.0, `dist/providers/*.js` (the driver
   defaults and the auth option each route uses).
-- **OpenCode 1** uses the same provider ids as OpenCode 2: the table gives it
+- **OpenCode 1** uses the same provider ids as OpenCode 2 where served: the table gives it
   the OpenCode ids, and its entry wraps every listed provider's
   `options.fetch` (`packages/opencode/src/v1/plugin.ts`). Its transport audit
   for v1.19.3 is design section 8.4.
@@ -97,6 +98,7 @@ pins, which carry the catalogs the hosts themselves use:
 | fireworks | `fireworks`, base `https://api.fireworks.ai/inference`, 8 `openai-completions` and 14 `anthropic-messages` models | `providers/fireworks.js`, base `https://api.fireworks.ai/inference/v1` | yes |
 | inception | absent from Pi's catalog | `providers/openai-compatible.js` with the catalog's `api.inceptionlabs.ai` base | yes (OpenAI-compatible bearer) |
 | kimi-coding | `kimi-coding`, base `https://api.kimi.com/coding/v1`, `openai-completions` | `providers/moonshot/chat.js` (the host routes `kimi-code-plan-global` through it); the catalog supplies the regional base | yes |
+| minimax-coding-plan | not in Pi 1.3.0's `dist/providers/all.js` | `providers/minimax.js:64-76`, bearer on chat, messages and responses. Catalog bases `https://api.minimax.io/v1` and `https://api.minimax.io/anthropic/v1` | OpenCode 2 yes. OpenCode 1 sends `x-api-key` |
 | openrouter | `openrouter`, base `https://openrouter.ai/api/v1` | `providers/openrouter.js`, base `https://openrouter.ai/api/v1` | yes |
 | synthetic | no registration in pi-ai 1.3.0 `dist/providers/all.js` | `providers/openai-compatible.js:11`, `AuthOptions.bearer`, catalog base `https://api.synthetic.new/openai/v1` | yes |
 | typesafe | `typesafe`, base `https://api.typesafe.ai/v1/`, api `typesafe-system-one` | `providers/typesafe-ai.js`, base `https://api.typesafe.ai/v1`, `AuthOptions.bearer` | OpenCode yes; Pi's api does not take a caller `fetch` |
@@ -120,6 +122,26 @@ Host rules that follow:
   contain no Synthetic plugin. Pi-ai 1.3.0's `dist/providers/all.js` has no
   Synthetic registration, so Pi refuses its row as `not-on-this-host`.
   The allowlist contains only `https://api.synthetic.new`.
+
+- **MiniMax Token Plan is OpenCode 2 only.** The
+  [`v2.2.0` snapshot](https://github.com/anomalyco/opencode/blob/1097e2668b1e08ad63bdf0b1c4860b9bc01e420c/packages/core/src/models-dev/snapshot.txt)
+  lists nine models under `minimax-coding-plan`. Its chat-completions and
+  responses routes use `https://api.minimax.io/v1`. Its messages route uses
+  `https://api.minimax.io/anthropic/v1`. In `@opencode/ai` 2.2.0,
+  `dist/providers/minimax.js:64-76` applies `AuthOptions.bearer` to all three
+  routes. `dist/providers/minimax/chat.js:1-8` and
+  `dist/providers/minimax/responses.js:1-8` pass `apiKey` to `MiniMax.configure`.
+  `dist/providers/minimax/messages.js:1` exports the native model. There is no
+  built-in MiniMax provider plugin in `packages/core/src/plugin/provider/`
+  at that revision.
+  On OpenCode 1, [models.dev](https://models.dev/api.json) (read
+  2026-11-01T09:50:41Z) routes this provider's nine models through
+  `@ai-sdk/anthropic`, which sends `x-api-key`, not a bearer.
+  OpenCode 1 v1.19.3's `packages/opencode/src/provider/provider.ts` has no
+  MiniMax loader to change that driver. Pi 1.3.0 does not register
+  `minimax-coding-plan` in `dist/providers/all.js`.
+  A vault row for this provider is refused as `not-on-this-host` on OpenCode 1
+  and Pi. Only the exact HTTPS origin `https://api.minimax.io` is allowed.
 
 - **Kimi Code's provider id is `kimi-code-plan-global`, not its model id.**
   The OpenCode 1 models.dev catalog (`https://models.dev/api.json`, read
@@ -392,6 +414,7 @@ select the provider either.
 | `apikey:deepseek` | `deepseek` | `llm-provider` | deepseek on every host |
 | `apikey:fireworks-ai` | `fireworks-ai` | `llm-provider` | `fireworks-ai` on OpenCode 1 and 2, `fireworks` on Pi |
 | `apikey:inception` | `inception` | `llm-provider` | inception on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
+| `apikey:minimax-coding-plan` | `minimax-coding-plan` | `llm-provider` | minimax-coding-plan on OpenCode 2. Refused `not-on-this-host` on OpenCode 1 and Pi |
 | `apikey:openrouter` | `openrouter` | `llm-provider` | openrouter on every host |
 | `apikey:synthetic` | `synthetic` | `llm-provider` | synthetic on OpenCode 1 and 2. Pi refuses `not-on-this-host` |
 | `apikey:typesafe` | `typesafe` | `llm-provider` | allowlisted on OpenCode 1 and 2, but unavailable in the checked catalogs; OpenCode 2 refuses `unknown-to-host`, Pi `not-on-this-host` |
