@@ -43,7 +43,7 @@ function fact(
   }
 }
 
-test('32 inventory rows classify per host without parsing credential ids', () => {
+test('33 inventory rows classify per host without parsing credential ids', () => {
   const rows: {
     value: VaultRowFacts
     expected: (host: Host) => ReturnType<typeof classifyRow>
@@ -118,7 +118,7 @@ test('32 inventory rows classify per host without parsing credential ids', () =>
       },
     })
   }
-  expect(rows).toHaveLength(32)
+  expect(rows).toHaveLength(33)
   for (const host of hosts)
     for (const item of rows)
       expect(classifyRow(item.value, facts(host), catalogEntries)).toEqual(
