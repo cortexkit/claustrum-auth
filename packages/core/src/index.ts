@@ -8,6 +8,7 @@ export {
   SlotQueue,
   transitionActivation,
 } from './activation.js'
+export { balanceProbeMs, isBalanceFailure } from './balance.js'
 export type { CoreFetch, FetchOptions } from './fetch.js'
 export { createFetch, maxBodyBytes } from './fetch.js'
 export type { MenuConsumer, MenuHub, VaultMenuOptions } from './menu.js'

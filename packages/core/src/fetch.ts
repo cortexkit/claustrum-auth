@@ -1,3 +1,4 @@
+import { balanceProbeMs, isBalanceFailure } from './balance.js'
 import {
   ClaustrumAuthError,
   checkOrigin,
@@ -64,7 +65,7 @@ function retryExpiry(response: Response, now: number) {
     const date = Date.parse(value)
     if (Number.isFinite(date) && date > now) return date
   }
-  return now + 60_000
+  return now + (response.status === 402 ? balanceProbeMs : 60_000)
 }
 
 function limited(marks: ReadonlyMap<string, number>, now: number) {
@@ -115,6 +116,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
     const tried = new Set<string>()
     const secrets: string[] = []
     let saw429 = false
+    let saw402 = false
     try {
       for (;;) {
         signal.throwIfAborted()
@@ -125,6 +127,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
           throw new ClaustrumAuthError('no-vault-account')
         }
         tried.add(route)
+        const previousMark = rateLimitMarks.get(route)
         let target = url
         let method = template.method
         let bytes = body
@@ -192,11 +195,29 @@ export function createFetch(options: FetchOptions): CoreFetch {
           }
           target = next
         }
-        if (response.status !== 429 && response.status !== 401)
+        let balance402 = false
+        if (response.status === 402) {
+          let text: string | undefined
+          if (options.entry.service === 'openrouter') {
+            try {
+              text = await response.clone().text()
+            } catch {}
+          }
+          balance402 = isBalanceFailure(options.entry.service, text)
+        }
+        if (
+          (response.ok || (response.status === 402 && !balance402)) &&
+          previousMark !== undefined &&
+          previousMark <= now() &&
+          rateLimitMarks.get(route) === previousMark
+        )
+          rateLimitMarks.delete(route)
+        if (response.status !== 401 && response.status !== 429 && !balance402)
           return await redactResponse(response, secrets)
         signal.throwIfAborted()
-        if (response.status === 429) {
-          saw429 = true
+        if (response.status === 429 || balance402) {
+          if (response.status === 429) saw429 = true
+          else saw402 = true
           rateLimitMarks.set(route, retryExpiry(response, now()))
         }
         const next = orderedRoutes(routing, tried)[0]
@@ -204,7 +225,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
           await response.body?.cancel().catch(() => {})
           continue
         }
-        if (response.status === 401 && saw429) {
+        if (saw429 && (response.status === 401 || saw402)) {
           await response.body?.cancel().catch(() => {})
           return limited(rateLimitMarks, now())
         }

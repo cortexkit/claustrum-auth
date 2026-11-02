@@ -1,6 +1,8 @@
 import {
+  balanceProbeMs,
   ClaustrumAuthError,
   checkHandshakeOrigin,
+  isBalanceFailure,
   orderedRoutes,
   type ProviderEntry,
   redactError,
@@ -160,13 +162,14 @@ function frameCode(event: Record<string, unknown>) {
 
 /**
  * Reads one Responses frame of an owned socket: output, the end of the
- * response, and the provider's error frames, whose 429 is a limit on the
- * account and whose 401 is reported like an HTTP 401. The error text handed
+ * response, and the provider's error frames. A confirmed balance 402 or a 429
+ * limits the account; a 401 is reported like an HTTP 401. The error text handed
  * to the installer is fixed: a frame may echo the served key.
  */
 export function inspectResponsesFrame(
   data: string,
   attempt: VaultAttempt | undefined,
+  service?: string,
 ): EventVerdict<never> | undefined {
   let event: unknown
   try {
@@ -197,12 +200,15 @@ export function inspectResponsesFrame(
     if (attempt && status !== undefined) attempt.frameStatus = status
     const code = frameCode(event)
     const limited =
-      status === 429 || (code !== undefined && /rate.?limit/iu.test(code))
+      status !== 402 &&
+      (status === 429 || (code !== undefined && /rate.?limit/iu.test(code)))
     return {
       error: 'the provider answered with an error frame',
-      ...(limited
-        ? { limit: { reason: 'rate-limit', status: status ?? 429 } }
-        : {}),
+      ...(status === 402 && isBalanceFailure(service, data)
+        ? { limit: { reason: 'payment-required', status } }
+        : limited
+          ? { limit: { reason: 'rate-limit', status: status ?? 429 } }
+          : {}),
     }
   }
   return { outputStarted: true }
@@ -218,7 +224,7 @@ export interface VaultAdapterOptions {
    */
   consumer: () => Promise<ServingConsumer | undefined>
   /**
-   * Accounts a 429 marked, with the time the mark ends. Shared with the
+   * Accounts a balance 402 or 429 marked, with the time the mark ends. Shared with the
    * installation's `limit` listener, which writes it.
    */
   rateLimitMarks: Map<string, number>
@@ -251,7 +257,11 @@ function retryAfterMs(headers: Headers, now: number) {
 
 /** Until when a limit keeps its account out of routing. */
 export function markUntil(limit: LimitSignal, now: number) {
-  return now + (limit.retryAfterMs ?? defaultMarkMs)
+  return (
+    now +
+    (limit.retryAfterMs ??
+      (limit.status === 402 ? balanceProbeMs : defaultMarkMs))
+  )
 }
 
 async function rebuild(request: Request, url: URL, headers: Headers) {
@@ -305,7 +315,7 @@ export function createVaultAdapter(
     ?.length
     ? ({ transport, data, attempt }) =>
         transport === 'ws'
-          ? inspectResponsesFrame(data, attempt.data)
+          ? inspectResponsesFrame(data, attempt.data, options.entry.service)
           : undefined
     : undefined
   // With vault mode turned off, the hub empties every roster at its next
@@ -334,7 +344,7 @@ export function createVaultAdapter(
         if (input.phase === 'retry') return undefined
         throw await noAccount()
       }
-      // Roster order, skipping accounts a 429 marked. A retry never picks the
+      // Skip accounts a balance 402 or 429 marked. A retry never picks the
       // refused account again: returning nothing keeps the host's decision.
       const tried = new Set(
         input.rerouteFrom ? [input.rerouteFrom.accountId] : [],
@@ -450,11 +460,20 @@ export function createVaultAdapter(
       if (!secret) return undefined
       return redactResponse(response, [secret])
     },
-    limitFromResponse({ status, headers }) {
-      if (status !== 429) return undefined
+    async limitFromResponse({ status, headers, body }) {
+      if (status !== 429 && status !== 402) return undefined
+      if (status === 402) {
+        let text: string | undefined
+        if (options.entry.service === 'openrouter') {
+          try {
+            text = await body()
+          } catch {}
+        }
+        if (!isBalanceFailure(options.entry.service, text)) return undefined
+      }
       const wait = retryAfterMs(headers, now())
       return {
-        reason: 'rate-limit',
+        reason: status === 402 ? 'payment-required' : 'rate-limit',
         status,
         ...(wait === undefined ? {} : { retryAfterMs: wait }),
       }

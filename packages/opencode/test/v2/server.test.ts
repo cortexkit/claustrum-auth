@@ -1,7 +1,11 @@
 import { expect, test } from 'bun:test'
 import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
-import { inspectResponsesFrame } from '../../src/v2/adapter.ts'
+import {
+  createVaultAdapter,
+  inspectResponsesFrame,
+  markUntil,
+} from '../../src/v2/adapter.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { phaseClock } from '../phase-clock.ts'
 import {
@@ -17,6 +21,10 @@ import {
 const bearer = (provider: string) => ({
   authorization: `Bearer ${placeholderSecret(provider)}`,
 })
+
+const balanceTable = table.map((entry, index) =>
+  index === 0 ? { ...entry, service: 'deepseek' } : entry,
+)
 
 function post(url: string, headers: Record<string, string>, body = '{}') {
   return new Request(url, {
@@ -255,6 +263,202 @@ test('class B rewrites the account segment from the served receipt, after author
     send(host, 'fixture-b', post(url, bearer('fixture-b'))),
   ).rejects.toThrow('served no account id for fixture-b')
   expect(vault.reads).toEqual(['b1', 'b2'])
+})
+
+test('402 HTTP returns a payment-required limit with Retry-After and a balance probe interval', async () => {
+  const adapter = createVaultAdapter({
+    entry: balanceTable[0],
+    provider: 'fixture-a',
+    consumer: async () => undefined,
+    rateLimitMarks: new Map(),
+    now: () => 1000,
+  })
+  for (const [value, wait] of [
+    [undefined, undefined],
+    ['invalid', undefined],
+    ['17', 17000],
+    ['Thu, 01 Jan 1970 00:00:11 GMT', 10000],
+    ['0', 0],
+  ] as const) {
+    const limit = await adapter.limitFromResponse?.({
+      status: 402,
+      headers: new Headers(value ? { 'retry-after': value } : {}),
+      body: async () => '',
+      attempt: {
+        providerID: 'fixture-a',
+        modelID: 'fixture-model',
+        sessionID: 'fixture-session',
+        agent: 'fixture-agent',
+        kind: 'primary',
+        accountId: 'a1',
+        attemptId: 'fixture-attempt',
+        transport: 'http',
+        data: {},
+      },
+    })
+    expect(limit).toEqual({
+      reason: 'payment-required',
+      status: 402,
+      ...(wait === undefined ? {} : { retryAfterMs: wait }),
+    })
+    if (!limit) throw new Error('missing limit')
+    expect(markUntil(limit, 1000)).toBe(1000 + (wait ?? 300000))
+  }
+})
+
+test('402 HTTP marks the account and the retry hook moves the turn to the next one without a vault report', async () => {
+  const { host, vault } = await startServer({
+    table: balanceTable,
+    rows: [row('a1'), row('a2')],
+  })
+  await login(host, 'fixture-a')
+  const first = await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+  )
+  await answer(
+    host,
+    first,
+    new Response('insufficient credits', {
+      status: 402,
+      headers: { 'retry-after': '120' },
+    }),
+  )
+  const retry = await trigger(host, 'retry', {
+    sessionID: first.scope.sessionID,
+    agent: first.scope.agent,
+    model: first.scope.model,
+    error: {
+      type: 'provider.error',
+      message: 'insufficient credits',
+      status: 402,
+    },
+    attempt: 1,
+    decision: { retry: false } as
+      | { retry: true; delay: number }
+      | { retry: false },
+  })
+  expect(retry.decision).toEqual({ retry: true, delay: 0 })
+  await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+    first.scope,
+  )
+  await send(host, 'fixture-a', post(`${origin}/v1`, bearer('fixture-a')))
+  expect(vault.reads).toEqual(['a1', 'a2', 'a2'])
+  expect(vault.reports).toEqual([])
+})
+
+test('OpenRouter key-cap 402 HTTP stays on the account, unchanged and unmarked', async () => {
+  const { host, vault } = await startServer({
+    table: table.map((entry) => ({ ...entry, service: 'openrouter' })),
+    rows: [row('a1'), row('a2')],
+  })
+  await login(host, 'fixture-a')
+  const first = await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+  )
+  const body =
+    '{ "error": { "metadata": { "limit_source": "openrouter_key_limit" } } }'
+  const response = await answer(
+    host,
+    first,
+    new Response(body, { status: 402 }),
+  )
+  expect(response.status).toBe(402)
+  expect(await response.text()).toBe(body)
+  const retry = await trigger(host, 'retry', {
+    sessionID: first.scope.sessionID,
+    agent: first.scope.agent,
+    model: first.scope.model,
+    error: { type: 'provider.error', message: 'cap', status: 402 },
+    attempt: 1,
+    decision: { retry: false } as
+      | { retry: true; delay: number }
+      | { retry: false },
+  })
+  expect(retry.decision).toEqual({ retry: false })
+  await send(host, 'fixture-a', post(`${origin}/v1`, bearer('fixture-a')))
+  expect(vault.reads).toEqual(['a1', 'a1'])
+  expect(vault.reports).toEqual([])
+})
+
+test('OpenRouter confirmed balance 402 HTTP moves to the next account', async () => {
+  const { host, vault } = await startServer({
+    table: table.map((entry) => ({ ...entry, service: 'openrouter' })),
+    rows: [row('a1'), row('a2')],
+  })
+  await login(host, 'fixture-a')
+  const first = await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+  )
+  await answer(
+    host,
+    first,
+    Response.json(
+      {
+        error: { metadata: { limit_source: 'openrouter_credits' } },
+      },
+      { status: 402 },
+    ),
+  )
+  const retry = await trigger(host, 'retry', {
+    sessionID: first.scope.sessionID,
+    agent: first.scope.agent,
+    model: first.scope.model,
+    error: { type: 'provider.error', message: 'balance', status: 402 },
+    attempt: 1,
+    decision: { retry: false } as
+      | { retry: true; delay: number }
+      | { retry: false },
+  })
+  expect(retry.decision).toEqual({ retry: true, delay: 0 })
+  await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+    first.scope,
+  )
+  expect(vault.reads).toEqual(['a1', 'a2'])
+  expect(vault.reports).toEqual([])
+})
+
+test('xAI 402 error frames never create a balance or rate limit', () => {
+  for (const code of ['payment_required', 'rate_limit_exceeded'])
+    expect(
+      inspectResponsesFrame(
+        JSON.stringify({ type: 'error', status: 402, error: { code } }),
+        {},
+        'xai',
+      )?.limit,
+    ).toBeUndefined()
+})
+
+test('402 WebSocket error frames return a payment-required limit without a vault report', async () => {
+  expect(
+    inspectResponsesFrame(
+      '{"type":"error","status":402,"error":{"message":"insufficient balance"}}',
+      {},
+      'deepseek',
+    ),
+  ).toMatchObject({ limit: { reason: 'payment-required', status: 402 } })
+  const { host, vault } = await startServer({
+    table: socketTable.map((entry) => ({ ...entry, service: 'deepseek' })),
+    rows: [row('a1'), row('a2')],
+  })
+  await login(host, 'fixture-a')
+  const first = scope('fixture-a')
+  await handshake(host, 'fixture-a', socketURL, first)
+  await receive(host, first, '{"type":"error","status":402}')
+  await handshake(host, 'fixture-a', socketURL, scope('fixture-a'))
+  expect(vault.reads).toEqual(['a1', 'a2'])
+  expect(vault.reports).toEqual([])
 })
 
 test('a 429 marks the account and the retry hook moves the turn to the next one', async () => {
@@ -570,46 +774,54 @@ test('WebSocket output markers exclude only envelope and error frames', () => {
     expect(inspectResponsesFrame(frame, undefined)?.outputStarted).toBe(true)
 })
 
-test('done-only WebSocket output prevents a 429 retry from moving to another account', async () => {
-  const { host, vault } = await startServer({
-    table: socketTable,
-    rows: [row('a1'), row('a2')],
+for (const status of [402, 429]) {
+  test(`done-only WebSocket output prevents a ${status} retry from moving to another account`, async () => {
+    const { host, vault } = await startServer({
+      table:
+        status === 402
+          ? socketTable.map((entry) => ({ ...entry, service: 'deepseek' }))
+          : socketTable,
+      rows: [row('a1'), row('a2')],
+    })
+    await login(host, 'fixture-a')
+    const s = scope('fixture-a')
+    const opened = await handshake(host, 'fixture-a', socketURL, s)
+    expect(opened.headers.authorization).toBe('Bearer secret-a1-1')
+    for (const frame of [
+      { type: 'response.created', response: { id: 'resp_1' } },
+      {
+        type: 'response.output_item.added',
+        item: { type: 'message', id: 'msg_1' },
+      },
+      {
+        type: 'response.output_text.done',
+        item_id: 'msg_1',
+        text: 'Already produced',
+      },
+      {
+        type: 'error',
+        status,
+        error: {
+          code: status === 402 ? 'payment_required' : 'rate_limit_exceeded',
+          message: 'refused',
+        },
+      },
+    ])
+      await receive(host, s, JSON.stringify(frame))
+    const retry = await trigger(host, 'retry', {
+      sessionID: s.sessionID,
+      agent: s.agent,
+      model: s.model,
+      error: { type: 'provider.error', message: 'refused', status },
+      attempt: 1,
+      decision: { retry: true, delay: 120_000 } as
+        | { retry: true; delay: number }
+        | { retry: false },
+    })
+    expect(retry.decision).toEqual({ retry: false })
+    expect(vault.reads).toEqual(['a1'])
   })
-  await login(host, 'fixture-a')
-  const s = scope('fixture-a')
-  const opened = await handshake(host, 'fixture-a', socketURL, s)
-  expect(opened.headers.authorization).toBe('Bearer secret-a1-1')
-  for (const frame of [
-    { type: 'response.created', response: { id: 'resp_1' } },
-    {
-      type: 'response.output_item.added',
-      item: { type: 'message', id: 'msg_1' },
-    },
-    {
-      type: 'response.output_text.done',
-      item_id: 'msg_1',
-      text: 'Already produced',
-    },
-    {
-      type: 'error',
-      status: 429,
-      error: { code: 'rate_limit_exceeded', message: 'slow down' },
-    },
-  ])
-    await receive(host, s, JSON.stringify(frame))
-  const retry = await trigger(host, 'retry', {
-    sessionID: s.sessionID,
-    agent: s.agent,
-    model: s.model,
-    error: { type: 'provider.rate-limit', message: 'rate', status: 429 },
-    attempt: 1,
-    decision: { retry: true, delay: 120_000 } as
-      | { retry: true; delay: number }
-      | { retry: false },
-  })
-  expect(retry.decision).toEqual({ retry: false })
-  expect(vault.reads).toEqual(['a1'])
-})
+}
 
 test('a 429 error frame marks the account and the next handshake goes to the next one; a 401 error frame is reported once', async () => {
   const clock = phaseClock('error frame test')

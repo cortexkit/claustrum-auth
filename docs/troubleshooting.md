@@ -100,6 +100,36 @@ row's current enabled/active state. If the account changed, repeat the host's
 activation flow so it picks up the current roster. Do not re-enroll every
 time a provider request fails.
 
+## A provider reports insufficient balance
+
+A 402 can indicate insufficient balance, a key spending cap or a temporary
+in-flight budget limit. Only a confirmed balance failure moves the request
+to another account. Only 401 is reported to the vault.
+
+[DeepSeek's error table](https://api-docs.deepseek.com/quick_start/error_codes)
+gives 402 one meaning, "Insufficient Balance", without a body field. The
+plugin uses that status meaning. For OpenRouter, the plugin requires
+`error.metadata.limit_source` to be `openrouter_credits` and excludes
+`error.metadata.reason: weight_exceeds_budget`, as described in
+[Handling 402 errors](https://openrouter.ai/docs/api-reference/limits#handling-402-errors).
+Key caps, in-flight budgets, unknown bodies and other providers' 402s stay
+with the user, with credentials removed and no new mark. Check the provider's
+balance and spending limits; a new key is not necessarily required.
+
+On OpenCode 1 and Pi, a balance mark lasts five minutes by default. After
+expiry, the next request can try the account again. Success clears the expired
+mark; another balance 402 renews it. No restart is required after a top-up.
+A valid `Retry-After` overrides the default and can delay this retry.
+Concurrent requests can each try an account whose mark has just expired.
+
+If every attempted account has a confirmed balance 402, the last provider
+response is returned with credentials removed. If no account is left and the
+attempts included both a balance 402 and a 429, the plugin returns
+`accounts-rate-limited` with status 429. While all accounts have active marks,
+a new request returns that same 429 without a provider send. OpenCode 2
+instead probes the first account on an all-marked fresh request; see
+[several accounts](opencode2.md#several-accounts).
+
 ## A provider still uses another login
 
 On OpenCode 1, an existing effective key in stored auth, config or the

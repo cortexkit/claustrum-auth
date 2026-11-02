@@ -40,6 +40,13 @@ including inactive accounts, in the desired order. This changes the vault
 roster's routing preference, not the credentials. Do not substitute account
 labels or credential ids for route ids.
 
+Requests move to the next account on 401, 429 or a confirmed empty-balance
+402 from DeepSeek or OpenRouter. A balance 402 marks the account unavailable
+for five minutes unless the provider sends `Retry-After`. After the mark
+expires, a request can try that account again without a restart. Key spending
+caps, in-flight budgets and other unconfirmed 402s do not move the request to
+another account. Only 401 is reported to the vault.
+
 ## Activate or release a provider
 
 On OpenCode 1 and Pi:
