@@ -53,7 +53,8 @@ provider is vault-owned. See [provider details](providers.md).
   it. If the provider puts the served key in the redirect address itself, that
   address carries the key to the other origin. Only an allowlisted provider
   can send such a redirect, and it already holds the key. The plugin cannot
-  prevent this on OpenCode 2 until the host keeps the redirect setting.
+  prevent this on OpenCode 2 until the host keeps the redirect setting
+  ([OpenCode issue #61272](https://github.com/anomalyco/opencode/issues/61272)).
 - **OpenCode 2 xAI WebSocket:** the plugin checks the handshake against the
   separate `wss://api.x.ai` allowlist before reading the vault, and checks that
   the URL has not changed before writing the key. The pinned host follows no
