@@ -30,6 +30,14 @@ any check fails, the login fails with a message that names the fix, and the
 host stores nothing. On success the host stores only a placeholder, which
 marks later requests for that provider as the plugin's.
 
+Each provider needs its own login. `--method claustrum-auth` picks the
+method without the menu: `opencode auth login <provider> --method
+claustrum-auth`. On OpenCode 2.2 the login runs through a background server
+that keeps the plugins it loaded when it started, so a server started before
+setup can't find the method. In that case run `opencode service restart` once,
+or add `--standalone` to run the login on a temporary server that reads your
+current configuration. Scripts should always add `--standalone`.
+
 To stop using the vault for a provider, sign in to it with your own key.
 Your key is then sent unchanged, and the plugin reads nothing from the vault
 for it. Nothing switches it back automatically, not even a restart.

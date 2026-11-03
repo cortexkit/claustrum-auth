@@ -63,6 +63,14 @@ model id.
 | OpenCode 2 | `opencode auth login <provider> --method claustrum-auth` |
 | Pi | `/claustrum use <provider>` inside Pi |
 
+OpenCode 2.2 runs `auth login` through a background server
+(`opencode service status` shows it). Quitting the OpenCode window doesn't stop
+that server, and it keeps the plugins it loaded when it started. If it was
+already running before setup, the login can't find the `claustrum-auth`
+method. Run `opencode service restart` once, or add `--standalone` to the
+login command, which runs that one login on a temporary server that reads your
+current configuration. Scripts should always add `--standalone`.
+
 For example, Kimi Code is `kimi-code-plan-global` on OpenCode and
 `kimi-coding` on Pi. Serving a turn requires a model in the host's catalog and
 the plugin's provider and request checks to pass.
