@@ -167,7 +167,10 @@ async function withTable(
     },
     table,
   )
-  afterThisTest(() => core.hub.dispose())
+  afterThisTest(async () => {
+    await core.disposeLimits()
+    await core.hub.dispose()
+  })
   await core.hub.refresh()
   const consumer = core.consumers.get(firstMember)
   if (!consumer) throw new Error(`missing ${firstMember} member`)

@@ -1,4 +1,4 @@
-import { balanceProbeMs, isBalanceFailure } from './balance.js'
+import { limitFromReply, limitMarkUntil, localLimitRefusal } from './limits.js'
 import {
   ClaustrumAuthError,
   checkOrigin,
@@ -56,39 +56,30 @@ async function bufferBody(request: Request): Promise<Uint8Array | undefined> {
   return bytes
 }
 
-function retryExpiry(response: Response, now: number) {
-  const value = response.headers.get('retry-after')
-  if (value !== null) {
-    const seconds = Number(value)
-    if (value.trim() && Number.isFinite(seconds) && seconds >= 0)
-      return now + seconds * 1000
-    const date = Date.parse(value)
-    if (Number.isFinite(date) && date > now) return date
-  }
-  return now + (response.status === 402 ? balanceProbeMs : 60_000)
-}
-
 function limited(marks: ReadonlyMap<string, number>, now: number) {
-  const expiries = [...marks.values()].filter((expiry) => expiry > now)
+  const expiries = [...marks.values()].filter(
+    (expiry) => Number.isFinite(expiry) && expiry > now,
+  )
   const seconds = Math.max(
     1,
     Math.ceil(
       ((expiries.length ? Math.min(...expiries) : now + 60_000) - now) / 1000,
     ),
   )
-  return Response.json(
-    { error: 'claustrum-auth: accounts-rate-limited' },
-    {
-      status: 429,
-      headers: { 'retry-after': String(seconds) },
-    },
+  return localLimitRefusal(
+    Response.json(
+      { error: 'claustrum-auth: accounts-rate-limited' },
+      {
+        status: 429,
+        headers: { 'retry-after': String(seconds) },
+      },
+    ),
   )
 }
 
 export function createFetch(options: FetchOptions): CoreFetch {
   const now = options.now ?? Date.now
   const rateLimitMarks = options.rateLimitMarks ?? new Map<string, number>()
-  const routing = { ...options, rateLimitMarks }
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input)
     const headers = new Headers(
@@ -108,6 +99,9 @@ export function createFetch(options: FetchOptions): CoreFetch {
     // (Node's undici) `new Request(request, { body: null })` takes the body
     // over instead of dropping it, so no request is derived from this one.
     const body = await bufferBody(request)
+    const limits = options.limits ? await options.limits() : undefined
+    let marks = limits ? await limits.marks() : rateLimitMarks
+    const routing = { ...options, rateLimitMarks: marks }
     const template = {
       method: request.method,
       credentials: request.credentials,
@@ -120,14 +114,24 @@ export function createFetch(options: FetchOptions): CoreFetch {
     try {
       for (;;) {
         signal.throwIfAborted()
+        if (limits) marks = routing.rateLimitMarks = await limits.marks()
         const route = orderedRoutes(routing, tried)[0]
         if (!route) {
           if (options.consumer.routingRows().length)
-            return limited(rateLimitMarks, now())
+            return limited(marks, now())
           throw new ClaustrumAuthError('no-vault-account')
         }
+        if (limits && !(await limits.beforeDispatch(route))) {
+          tried.add(route)
+          continue
+        }
+        if (limits) {
+          routing.rateLimitMarks = marks = await limits.marks()
+          if ((marks.get(route) ?? 0) > now()) continue
+        }
         tried.add(route)
-        const previousMark = rateLimitMarks.get(route)
+        const previousMark = marks.get(route)
+        const observation = limits?.observe(route)
         let target = url
         let method = template.method
         let bytes = body
@@ -195,30 +199,46 @@ export function createFetch(options: FetchOptions): CoreFetch {
           }
           target = next
         }
-        let balance402 = false
-        if (response.status === 402) {
-          let text: string | undefined
-          if (options.entry.service === 'openrouter') {
-            try {
-              text = await response.clone().text()
-            } catch {}
-          }
-          balance402 = isBalanceFailure(options.entry.service, text)
-        }
+        const parsed = await limitFromReply({
+          account: observation?.binding.account ?? {
+            namespace: 'claustrum-auth:standalone',
+            accountId: route,
+            incarnation: 'standalone',
+          },
+          service: options.entry.service,
+          status: response.status,
+          headers: response.headers,
+          body: () => response.clone().text(),
+          now: now(),
+        })
+        const balance402 = parsed?.kind === 'payment-balance'
         if (
           (response.ok || (response.status === 402 && !balance402)) &&
-          previousMark !== undefined &&
-          previousMark <= now() &&
-          rateLimitMarks.get(route) === previousMark
-        )
-          rateLimitMarks.delete(route)
+          (previousMark !== undefined || observation?.hadMark) &&
+          (previousMark === undefined || previousMark <= now())
+        ) {
+          if (limits && observation) limits.clear(observation)
+          else if (rateLimitMarks.get(route) === previousMark)
+            rateLimitMarks.delete(route)
+        }
+        // statusVaultOrder does not yet combine payment and 429 history or
+        // retain a payment cause on persisted marks. Keep the existing terminal
+        // decision until those shared contracts can reproduce balance failover.
         if (response.status !== 401 && response.status !== 429 && !balance402)
           return await redactResponse(response, secrets)
         signal.throwIfAborted()
         if (response.status === 429 || balance402) {
           if (response.status === 429) saw429 = true
           else saw402 = true
-          rateLimitMarks.set(route, retryExpiry(response, now()))
+          if (parsed) {
+            const until = limitMarkUntil(parsed, 'opencode1', now())
+            if (until !== undefined) {
+              if (limits && observation) {
+                limits.mark(observation, until)
+                routing.rateLimitMarks = marks = await limits.marks()
+              } else rateLimitMarks.set(route, until)
+            }
+          }
         }
         const next = orderedRoutes(routing, tried)[0]
         if (next) {
@@ -227,7 +247,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
         }
         if (saw429 && (response.status === 401 || saw402)) {
           await response.body?.cancel().catch(() => {})
-          return limited(rateLimitMarks, now())
+          return limited(marks, now())
         }
         return await redactResponse(response, secrets)
       }

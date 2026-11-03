@@ -5,6 +5,26 @@ This repository uses CortexKit's tag-driven release workflow. One version covers
 `@cortexkit/claustrum-auth-core` stays private at its development version: it is
 bundled into the public packages, not published or installed by consumers.
 
+## Unreleased: shared limit bookkeeping (preparatory adoption)
+
+- Rate-limit and confirmed balance marks now use common-auth's shared registry
+  and the existing roster's `limits` field. Processes using the same provider
+  roster agree on marks, including after a restart. Different roster paths
+  remain separate namespaces.
+- Successful post-expiry probes clear marks through registry commands that
+  prevent a delayed pre-clear mark from restoring a cleared deadline.
+- OpenCode 2 now wires `responseRetry` to veto replay of a local refusal, using
+  in-memory response identity rather than matching provider error text. Existing
+  provider responses are unchanged. A fresh OpenCode 2 request still probes the
+  first account when every account has an active timed mark.
+
+The shared payment decision/refusal contract is not yet sufficient to replace
+the plugin's terminal decisions. With only one vault account that has run out of
+balance, a request made while its balance mark is active still says
+`accounts-rate-limited`. Replacing that misleading refusal with a payment cause
+awaits the shared extension; this preparatory adoption does not change that
+message or add a same-account-wait setting.
+
 ## Before the first release
 
 The committed workflow uses **npm Trusted Publishing (OIDC)**.

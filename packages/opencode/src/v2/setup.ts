@@ -1,4 +1,5 @@
 import {
+  type CoreLimits,
   command,
   type HostFacts,
   type MenuConsumer,
@@ -40,7 +41,7 @@ export const vaultMethodId = 'claustrum-auth'
 export const vaultMethodLabel = 'Claustrum vault (claustrum-auth plugin)'
 
 /** What the entry builds once the host's catalog is known. */
-export interface ServerCore {
+export interface ServerCore extends CoreLimits {
   hub: Pick<ClaustrumDiscoveryHub, 'start' | 'refresh' | 'dispose'> & MenuHub
   consumers: ReadonlyMap<string, ServingConsumer & MenuConsumer>
   entries: readonly ProviderEntry[]
@@ -137,10 +138,14 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
       const built = deps.createCore(await catalogFacts(ctx, ids))
       if (closed) {
         // Disposed while the catalog was read: nothing may keep running.
+        await built.disposeLimits?.()
         await built.hub.dispose()
         throw new Error('claustrum-auth plugin: stopped.')
       }
-      disposers.push(() => built.hub.dispose())
+      disposers.push(async () => {
+        await built.disposeLimits?.()
+        await built.hub.dispose()
+      })
       built.hub.start()
       try {
         await built.hub.refresh()
@@ -267,6 +272,7 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
           entry,
           provider,
           consumer: () => consumerOf(provider),
+          limits: async () => (await ready()).limits?.(provider),
           rateLimitMarks: marks,
           now,
           onError: deps.onError,

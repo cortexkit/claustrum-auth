@@ -3,6 +3,7 @@ import {
   ClaustrumDiscoveryHub,
   type ClaustrumDiscoveryHubOptions,
 } from '@cortexkit/common-auth/claustrum'
+import { type AccountLimits, createAccountLimits } from './limits.js'
 import {
   classifyingFamily,
   type HostFacts,
@@ -60,7 +61,31 @@ export function createCoreWithTable(
       }),
     ]),
   )
-  return { hub, consumers, entries, memberErrors }
+  const registries = new Map<string, Promise<AccountLimits>>()
+  const limits = (provider: string) => {
+    let current = registries.get(provider)
+    if (!current) {
+      const consumer = consumers.get(provider)
+      if (!consumer) throw new Error('claustrum-auth: unknown limit provider')
+      current = createAccountLimits({
+        provider,
+        path: hub.rosterPath(provider),
+        consumer,
+        now: options.now,
+        onError: options.onError,
+      }).catch((error) => {
+        registries.delete(provider)
+        throw error
+      })
+      registries.set(provider, current)
+    }
+    return current
+  }
+  const disposeLimits = async () => {
+    for (const registry of registries.values()) await (await registry).dispose()
+    registries.clear()
+  }
+  return { hub, consumers, entries, memberErrors, limits, disposeLimits }
 }
 
 /** What `unsavedRosterCause` reads from a core built by `createCore`. */

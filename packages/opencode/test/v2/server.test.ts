@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { localLimitRefusal } from '@cortexkit/claustrum-auth-core'
 import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import {
@@ -25,6 +26,48 @@ const bearer = (provider: string) => ({
 const balanceTable = table.map((entry, index) =>
   index === 0 ? { ...entry, service: 'deepseek' } : entry,
 )
+
+test('responseRetry vetoes only owned local refusals, never identical provider or foreign replies', async () => {
+  for (const source of ['local', 'provider', 'foreign'] as const) {
+    const { host } = await startServer({ rows: [row('a1')] })
+    const sent = await send(
+      host,
+      'fixture-a',
+      post(
+        `${origin}/v1`,
+        source === 'foreign'
+          ? { authorization: 'Bearer user-key' }
+          : bearer('fixture-a'),
+      ),
+    )
+    const reply = Response.json(
+      { error: 'claustrum-auth: accounts-rate-limited' },
+      { status: 429 },
+    )
+    await answer(
+      host,
+      sent,
+      source === 'provider' ? reply : localLimitRefusal(reply),
+    )
+    const retry = await trigger(host, 'retry', {
+      sessionID: sent.scope.sessionID,
+      agent: sent.scope.agent,
+      model: sent.scope.model,
+      error: {
+        type: 'provider.error',
+        message: 'claustrum-auth: accounts-rate-limited',
+        status: 429,
+      },
+      attempt: 1,
+      decision: { retry: true, delay: 2000 } as
+        | { retry: true; delay: number }
+        | { retry: false },
+    })
+    expect(retry.decision).toEqual(
+      source === 'local' ? { retry: false } : { retry: true, delay: 2000 },
+    )
+  }
+})
 
 function post(url: string, headers: Record<string, string>, body = '{}') {
   return new Request(url, {
