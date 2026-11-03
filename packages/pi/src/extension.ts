@@ -343,6 +343,7 @@ class PiRuntime {
       consumer: served.consumer,
       fetch: inner,
       rateLimitMarks: served.marks,
+      limits: () => this.#core.limits(served.provider),
     })
     return async (input, init) => {
       try {
@@ -588,6 +589,7 @@ class PiRuntime {
   async dispose() {
     if (this.#timer) clearInterval(this.#timer)
     await this.queue.run(async () => {}).catch(() => {})
+    await this.#core.disposeLimits()
     await this.#core.hub.dispose()
   }
 }

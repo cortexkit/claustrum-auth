@@ -1,4 +1,5 @@
 import {
+  type CoreLimits,
   type CoreOptions,
   command,
   opencodeEnrollment,
@@ -39,7 +40,7 @@ type Core = {
   consumers: ReadonlyMap<string, ClaustrumConsumer>
   entries: readonly ProviderEntry[]
   memberErrors: Map<string, unknown>
-}
+} & CoreLimits
 
 export interface OpenCode1PluginOptions {
   // The supported-provider table and the core built from it. The published
@@ -228,10 +229,12 @@ export async function opencode1Hosts(
           typeof blockOptions.fetch === 'function'
             ? (blockOptions.fetch as typeof fetch)
             : undefined
+        const limits = core.limits
         blockOptions.fetch = providerFetch({
           provider,
           entry,
           consumer,
+          limits: limits ? () => limits(provider) : undefined,
           previous,
           envNames: () => envNames(provider),
           env: () => hostEnvironment(env() as NodeJS.ProcessEnv),
@@ -291,6 +294,7 @@ export async function opencode1Hosts(
       const current = registry.get(key)
       if (!current || --current.holders > 0) return
       registry.delete(key)
+      await current.core.disposeLimits?.()
       await current.core.hub.dispose()
     },
   }
