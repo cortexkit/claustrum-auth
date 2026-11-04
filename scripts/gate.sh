@@ -13,9 +13,14 @@ set -euo pipefail
 step=arguments
 commit=unknown
 logs=
+# Set only on the two intended exits. macOS /bin/bash 3.2 aborts on an
+# empty-array expansion under `set -u` yet reports status 0 to an EXIT trap,
+# so an unflagged status 0 means the gate stopped early and must fail.
+finished=
 finish() {
   local result=$?
   trap - EXIT
+  if [[ $result -eq 0 && -z $finished ]]; then result=1; fi
   if [[ -n "$logs" ]]; then rm -rf "$logs"; fi
   if [[ $result -eq 0 ]]; then
     printf 'GATE_OK %s\n' "$commit"
@@ -91,7 +96,7 @@ run_step typecheck bun run typecheck
 # Biome checks formatting as well as lint; lint also checks source portability.
 run_step lint bun run lint
 run_step ignored-cortexkit ignored_files
-if [[ $fast == --fast ]]; then exit 0; fi
+if [[ $fast == --fast ]]; then finished=1; exit 0; fi
 
 step=suite-logs
 mkdir -p target/scratch
@@ -145,3 +150,4 @@ launch setup-menu env CLAUSTRUM_AUTH_SETUP_E2E=1 CLAUSTRUM_AUTH_OPENCODE1_E2E=1 
   bun test packages/opencode/test/opencode1.e2e.test.ts packages/opencode/test/v2/e2e/opencode2.e2e.test.ts packages/pi/test/extension.e2e.test.ts --test-name-pattern 'setup test build' --timeout 600000
 collect
 if [[ -n "$failed" ]]; then step=$failed; exit 1; fi
+finished=1
