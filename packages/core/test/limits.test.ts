@@ -9,6 +9,107 @@ const account = { namespace: 'fixture', accountId: 'a', incarnation: 'one' }
 const placeholder = 'owned-placeholder'
 const headers = { authorization: `Bearer ${placeholder}` }
 
+for (const count of [1, 2]) {
+  test(`${count} balance-marked accounts refuse with the payment cause on a fresh request`, async () => {
+    const h = await harness(
+      Array.from({ length: count }, (_, index) => row(String(index))),
+    )
+    let sends = 0
+    const fetch = createFetch({
+      entry: { ...fixtureEntries[0], service: 'deepseek' },
+      placeholder,
+      consumer: h.consumer,
+      limits: () => h.limits('fixture-a'),
+      fetch: async () => {
+        sends++
+        return new Response('Insufficient Balance', { status: 402 })
+      },
+    })
+    expect((await fetch('https://fixture.invalid', { headers })).status).toBe(
+      402,
+    )
+    const local = await fetch('https://fixture.invalid', { headers })
+    expect(local.status).toBe(402)
+    expect(await local.text()).toMatch(/balance|payment/i)
+    expect(sends).toBe(count)
+  })
+}
+
+test('an overflowing balance Retry-After uses the five-minute mark default', async () => {
+  const h = await harness()
+  let sends = 0
+  const fetch = createFetch({
+    entry: { ...fixtureEntries[0], service: 'deepseek' },
+    placeholder,
+    consumer: h.consumer,
+    limits: () => h.limits('fixture-a'),
+    fetch: async () => {
+      sends++
+      return new Response('Insufficient Balance', {
+        status: 402,
+        headers: { 'retry-after': '1e308' },
+      })
+    },
+  })
+  await fetch('https://fixture.invalid', { headers })
+  const local = await fetch('https://fixture.invalid', { headers })
+  expect(local.headers.get('retry-after')).toBe('300')
+  expect(sends).toBe(1)
+})
+
+test('an overflowing rate Retry-After uses the one-minute mark default', async () => {
+  const h = await harness([row('a')], 'opencode1', () => 1000)
+  const fetch = createFetch({
+    entry: fixtureEntries[0],
+    placeholder,
+    consumer: h.consumer,
+    now: () => 1000,
+    rateLimitMarks: new Map(),
+    fetch: async () =>
+      new Response('rate', {
+        status: 429,
+        headers: { 'retry-after': '1e308' },
+      }),
+  })
+  await fetch('https://fixture.invalid', { headers })
+  const local = await fetch('https://fixture.invalid', { headers })
+  expect(local.headers.get('retry-after')).toBe('60')
+  expect(h.reads).toEqual(['a'])
+})
+
+test('a cold-start top-up probe clears expired balance evidence before a delayed writer returns', async () => {
+  let time = 1000
+  const h = await harness([row('a')], 'opencode1', () => time)
+  const first = await h.limits('fixture-a')
+  const route = h.consumer.routingRows()[0].id
+  const delayed = first.observe(route)
+  let status = 402
+  const fetch = createFetch({
+    entry: { ...fixtureEntries[0], service: 'deepseek' },
+    placeholder,
+    consumer: h.consumer,
+    now: () => time,
+    limits: () => h.limits('fixture-a'),
+    fetch: async () => new Response('probe', { status }),
+  })
+  await fetch('https://fixture.invalid', { headers })
+  await first.flush()
+  await h.disposeLimits()
+  time = 301000
+  status = 200
+  expect((await fetch('https://fixture.invalid', { headers })).status).toBe(200)
+  const fresh = await h.limits('fixture-a')
+  await fresh.beforeDispatch(route)
+  fresh.mark(delayed, {
+    scope: { kind: 'pool' },
+    mergeLaw: 'overwrite',
+    cause: 'payment-balance',
+    until: 7201000,
+  })
+  await fresh.flush()
+  expect((await fresh.marks()).has(route)).toBe(false)
+})
+
 for (const [value, expected] of [
   ['17', 18000],
   ['0', 1000],
@@ -141,7 +242,12 @@ test('a successful expired-mark probe fences delayed pre-clear marks', async () 
   const limits = await h.limits('fixture-a')
   const route = h.consumer.routingRows()[0].id
   const stale = limits.observe(route)
-  limits.mark(stale, Date.now() - 1)
+  limits.mark(stale, {
+    scope: { kind: 'pool' },
+    mergeLaw: 'overwrite',
+    cause: 'rate-limit',
+    until: Date.now() - 1,
+  })
   await limits.flush()
   const fetch = createFetch({
     entry: fixtureEntries[0],
@@ -152,7 +258,12 @@ test('a successful expired-mark probe fences delayed pre-clear marks', async () 
   })
   expect((await fetch('https://fixture.invalid', { headers })).status).toBe(200)
   expect(await limits.beforeDispatch(route)).toBe(true)
-  limits.mark(stale, Date.now() + 240000)
+  limits.mark(stale, {
+    scope: { kind: 'pool' },
+    mergeLaw: 'overwrite',
+    cause: 'rate-limit',
+    until: Date.now() + 240000,
+  })
   await limits.flush()
   expect((await limits.marks()).has(route)).toBe(false)
   expect(

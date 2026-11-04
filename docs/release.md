@@ -5,25 +5,40 @@ This repository uses CortexKit's tag-driven release workflow. One version covers
 `@cortexkit/claustrum-auth-core` stays private at its development version: it is
 bundled into the public packages, not published or installed by consumers.
 
-## Unreleased: shared limit bookkeeping (preparatory adoption)
+## Unreleased: shared account-limit policy
+
+This adoption is not ready to merge with common-auth 0.35.0: a successful
+balance probe can fence out an already-dispatched rate-limit observation of a
+different cause. The regression remains enabled while the shared library gains
+cause-aware recovery tombstones; the plugin does not rewrite in-flight evidence.
 
 - Rate-limit and confirmed balance marks now use common-auth's shared registry
   and the existing roster's `limits` field. Processes using the same provider
   roster agree on marks, including after a restart. Different roster paths
   remain separate namespaces.
 - Successful post-expiry probes clear marks through registry commands that
-  prevent a delayed pre-clear mark from restoring a cleared deadline.
+  prevent a delayed pre-clear mark from restoring a cleared deadline, even when
+  a process starts after the old timer expired. Clears preserve newer evidence
+  and already-active marks with a different cause.
 - OpenCode 2 now wires `responseRetry` to veto replay of a local refusal, using
   in-memory response identity rather than matching provider error text. Existing
   provider responses are unchanged. A fresh OpenCode 2 request still probes the
   first account when every account has an active timed mark.
 
-The shared payment decision/refusal contract is not yet sufficient to replace
-the plugin's terminal decisions. With only one vault account that has run out of
-balance, a request made while its balance mark is active still says
-`accounts-rate-limited`. Replacing that misleading refusal with a payment cause
-awaits the shared extension; this preparatory adoption does not change that
-message or add a same-account-wait setting.
+- All three hosts now use common-auth 0.35.0's `statusVaultOrder` decision policy.
+  Provider-specific DeepSeek and OpenRouter balance detection remains in the
+  plugin; key caps and unconfirmed 402s still pass through unchanged.
+- On OpenCode 1 and Pi, a fresh request whose eligible accounts are all marked
+  for insufficient balance now returns status 402 with
+  `claustrum-auth: insufficient balance`, not the misleading
+  `accounts-rate-limited` 429. This includes a sole account. A mixed balance/rate
+  pool, or older marks with no recorded cause, retains the existing 429.
+- A numeric `Retry-After` too large to form a finite millisecond deadline now
+  uses the usual default: five minutes for balance, one minute for rate limiting.
+
+Vault order, mixed attempted balance/429 exhaustion, provider-response text,
+OpenCode 2 output/ownership retry safety and Pi's final-message presentation
+remain unchanged. No same-account-wait setting or plugin sleep is added.
 
 ## Before the first release
 

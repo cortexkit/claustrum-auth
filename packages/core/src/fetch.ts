@@ -1,4 +1,14 @@
-import { limitFromReply, limitMarkUntil, localLimitRefusal } from './limits.js'
+import { randomUUID } from 'node:crypto'
+import {
+  createRequestHistory,
+  decideAfterLimit,
+  type LimitCandidate,
+  type LimitMark,
+  markFromSignal,
+  statusVaultOrder,
+} from '@cortexkit/common-auth/limits'
+import { hasBalanceRule } from './balance.js'
+import { limitFromReply, limitRefusal } from './limits.js'
 import {
   ClaustrumAuthError,
   checkOrigin,
@@ -7,7 +17,7 @@ import {
   redactError,
   redactResponse,
 } from './placement.js'
-import { orderedRoutes, placeReceipt, type ServingOptions } from './serving.js'
+import { placeReceipt, type ServingOptions } from './serving.js'
 
 export const maxBodyBytes = 64 * 1024 * 1024
 export type CoreFetch = (
@@ -15,6 +25,7 @@ export type CoreFetch = (
   init?: RequestInit,
 ) => Promise<Response>
 export interface FetchOptions extends ServingOptions {
+  host?: 'opencode1' | 'pi'
   fetch: CoreFetch
   // The host supplies its own effective-key resolution, including environment
   // case rules and config precedence. The check is repeated on every request.
@@ -56,30 +67,11 @@ async function bufferBody(request: Request): Promise<Uint8Array | undefined> {
   return bytes
 }
 
-function limited(marks: ReadonlyMap<string, number>, now: number) {
-  const expiries = [...marks.values()].filter(
-    (expiry) => Number.isFinite(expiry) && expiry > now,
-  )
-  const seconds = Math.max(
-    1,
-    Math.ceil(
-      ((expiries.length ? Math.min(...expiries) : now + 60_000) - now) / 1000,
-    ),
-  )
-  return localLimitRefusal(
-    Response.json(
-      { error: 'claustrum-auth: accounts-rate-limited' },
-      {
-        status: 429,
-        headers: { 'retry-after': String(seconds) },
-      },
-    ),
-  )
-}
-
 export function createFetch(options: FetchOptions): CoreFetch {
   const now = options.now ?? Date.now
+  const host = options.host ?? 'opencode1'
   const rateLimitMarks = options.rateLimitMarks ?? new Map<string, number>()
+  const localMarks = new Map<string, LimitMark>()
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input)
     const headers = new Headers(
@@ -100,37 +92,137 @@ export function createFetch(options: FetchOptions): CoreFetch {
     // over instead of dropping it, so no request is derived from this one.
     const body = await bufferBody(request)
     const limits = options.limits ? await options.limits() : undefined
-    let marks = limits ? await limits.marks() : rateLimitMarks
-    const routing = { ...options, rateLimitMarks: marks }
     const template = {
       method: request.method,
       credentials: request.credentials,
       cache: request.cache,
     }
     const tried = new Set<string>()
+    const rejected = new Set<string>()
     const secrets: string[] = []
-    let saw429 = false
-    let saw402 = false
+    let pending:
+      | {
+          response: Response
+          account: LimitCandidate['account']
+          parsed: Awaited<ReturnType<typeof limitFromReply>>
+        }
+      | undefined
+    let history = createRequestHistory({
+      requestId: randomUUID(),
+      originalUrl: url.href,
+      clockNow: now(),
+    })
+    const candidates = async (): Promise<LimitCandidate[]> => {
+      const rows = limits
+        ? await limits.candidates()
+        : options.consumer.routingRows().map((row) => {
+            const until = rateLimitMarks.get(row.id)
+            const blockers =
+              until !== undefined && until > now()
+                ? [
+                    {
+                      kind: 'hard' as const,
+                      until,
+                      cause:
+                        localMarks.get(row.id)?.until === until
+                          ? localMarks.get(row.id)?.cause
+                          : undefined,
+                    },
+                  ]
+                : []
+            return {
+              account: {
+                namespace: 'claustrum-auth:standalone',
+                accountId: row.id,
+                incarnation: 'standalone',
+              },
+              admitted: true,
+              placementEligible: true,
+              ready: blockers.length === 0,
+              blockers,
+            }
+          })
+      return rows.map((row) => ({
+        ...row,
+        admitted: row.admitted && !rejected.has(row.account.accountId),
+        placementEligible:
+          row.placementEligible && !tried.has(row.account.accountId),
+      }))
+    }
+    const decide = (
+      phase: 'pre-send' | 'after-limit',
+      rows: LimitCandidate[],
+      status?: number,
+      attempted?: LimitCandidate['account'],
+      parsed?: Awaited<ReturnType<typeof limitFromReply>>,
+    ) => {
+      const next = rows.find(
+        (row) => row.admitted && row.ready && row.placementEligible,
+      )
+      const decision = decideAfterLimit(
+        {
+          phase,
+          host,
+          now: now(),
+          clockNow: now(),
+          sessionId: history.requestId,
+          requestScope: { kind: 'pool' },
+          history,
+          attempted,
+          signal: parsed,
+          status,
+          delivery: { owned: true, attributable: true, replayable: true },
+          candidates: rows,
+          selection: next
+            ? { account: next.account, pin: 'preserve' }
+            : undefined,
+        },
+        statusVaultOrder,
+      )
+      history = decision.history
+      return decision
+    }
     try {
       for (;;) {
         signal.throwIfAborted()
-        if (limits) marks = routing.rateLimitMarks = await limits.marks()
-        const route = orderedRoutes(routing, tried)[0]
-        if (!route) {
-          if (options.consumer.routingRows().length)
-            return limited(marks, now())
+        const rows = await candidates()
+        if (!pending && !rows.some((row) => row.admitted))
           throw new ClaustrumAuthError('no-vault-account')
+        // A failed provider response stays readable until a replacement send
+        // is committed. Reloads must not turn it into a fresh-request refusal.
+        const initial = pending
+          ? decide(
+              'after-limit',
+              rows,
+              pending.response.status,
+              pending.account,
+              pending.parsed,
+            )
+          : decide('pre-send', rows)
+        if (initial.action === 'pass' && pending)
+          return await redactResponse(pending.response, secrets)
+        if (initial.action === 'refuse') {
+          await pending?.response.body?.cancel().catch(() => {})
+          return limitRefusal(initial, host, now())
         }
+        if (initial.action !== 'reroute')
+          throw new Error('claustrum-auth: unsupported limit action')
+        const route = initial.account.accountId
         if (limits && !(await limits.beforeDispatch(route))) {
-          tried.add(route)
+          rejected.add(route)
           continue
         }
         if (limits) {
-          routing.rateLimitMarks = marks = await limits.marks()
-          if ((marks.get(route) ?? 0) > now()) continue
+          if (
+            !(await candidates()).find((row) => row.account.accountId === route)
+              ?.ready
+          )
+            continue
         }
+        await pending?.response.body?.cancel().catch(() => {})
+        pending = undefined
         tried.add(route)
-        const previousMark = marks.get(route)
+        const previousMark = rateLimitMarks.get(route)
         const observation = limits?.observe(route)
         let target = url
         let method = template.method
@@ -200,11 +292,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
           target = next
         }
         const parsed = await limitFromReply({
-          account: observation?.binding.account ?? {
-            namespace: 'claustrum-auth:standalone',
-            accountId: route,
-            incarnation: 'standalone',
-          },
+          account: observation?.binding.account ?? initial.account,
           service: options.entry.service,
           status: response.status,
           headers: response.headers,
@@ -212,46 +300,38 @@ export function createFetch(options: FetchOptions): CoreFetch {
           now: now(),
         })
         const balance402 = parsed?.kind === 'payment-balance'
-        if (
-          (response.ok || (response.status === 402 && !balance402)) &&
-          (previousMark !== undefined || observation?.hadMark) &&
-          (previousMark === undefined || previousMark <= now())
-        ) {
-          if (limits && observation) limits.clear(observation)
-          else if (rateLimitMarks.get(route) === previousMark)
+        if (response.ok || (response.status === 402 && !balance402)) {
+          if (limits && observation) {
+            if (hasBalanceRule(options.entry.service))
+              limits.clear(observation, 'payment-balance')
+            if (observation.rateProbe) limits.clear(observation, 'rate-limit')
+          } else if (
+            previousMark !== undefined &&
+            previousMark <= now() &&
+            rateLimitMarks.get(route) === previousMark
+          )
             rateLimitMarks.delete(route)
         }
-        // statusVaultOrder does not yet combine payment and 429 history or
-        // retain a payment cause on persisted marks. Keep the existing terminal
-        // decision until those shared contracts can reproduce balance failover.
-        if (response.status !== 401 && response.status !== 429 && !balance402)
-          return await redactResponse(response, secrets)
         signal.throwIfAborted()
-        if (response.status === 429 || balance402) {
-          if (response.status === 429) saw429 = true
-          else saw402 = true
-          if (parsed) {
-            const until = limitMarkUntil(parsed, 'opencode1', now())
-            if (until !== undefined) {
-              if (limits && observation) {
-                limits.mark(observation, until)
-                routing.rateLimitMarks = marks = await limits.marks()
-              } else rateLimitMarks.set(route, until)
-            }
+        const mark = markFromSignal(parsed, statusVaultOrder.markers[host], {
+          now: now(),
+        })
+        if (mark) {
+          if (limits && observation)
+            limits.mark(observation, mark, parsed?.observedAt)
+          else {
+            rateLimitMarks.set(route, mark.until)
+            localMarks.set(route, mark)
           }
         }
-        const next = orderedRoutes(routing, tried)[0]
-        if (next) {
-          await response.body?.cancel().catch(() => {})
-          continue
+        pending = {
+          response,
+          account: observation?.binding.account ?? initial.account,
+          parsed,
         }
-        if (saw429 && (response.status === 401 || saw402)) {
-          await response.body?.cancel().catch(() => {})
-          return limited(marks, now())
-        }
-        return await redactResponse(response, secrets)
       }
     } catch (error) {
+      await pending?.response.body?.cancel().catch(() => {})
       throw redactError(error, secrets)
     }
   }

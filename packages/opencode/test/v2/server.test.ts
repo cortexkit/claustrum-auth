@@ -1,11 +1,14 @@
 import { expect, test } from 'bun:test'
-import { localLimitRefusal } from '@cortexkit/claustrum-auth-core'
+import {
+  limitMarkUntil,
+  localLimitRefusal,
+} from '@cortexkit/claustrum-auth-core'
 import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import {
   createVaultAdapter,
   inspectResponsesFrame,
-  markUntil,
+  type VaultAttempt,
 } from '../../src/v2/adapter.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { phaseClock } from '../phase-clock.ts'
@@ -26,6 +29,124 @@ const bearer = (provider: string) => ({
 const balanceTable = table.map((entry, index) =>
   index === 0 ? { ...entry, service: 'deepseek' } : entry,
 )
+
+test('a successful OpenCode 2 top-up probe clears an active balance mark through the registry', async () => {
+  let time = 1000
+  const { host, lastCore } = await startServer({
+    table: balanceTable,
+    rows: [row('a1')],
+    now: () => time,
+  })
+  const first = await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+  )
+  await answer(
+    host,
+    first,
+    new Response('Insufficient Balance', { status: 402 }),
+  )
+  const retry = (s: typeof first.scope, status: number) =>
+    trigger(host, 'retry', {
+      sessionID: s.sessionID,
+      agent: s.agent,
+      model: s.model,
+      error: { type: 'provider.error', message: 'provider reply', status },
+      attempt: 1,
+      decision: { retry: true, delay: 2000 } as
+        | { retry: true; delay: number }
+        | { retry: false },
+    })
+  await retry(first.scope, 402)
+  const core = lastCore()
+  if (!core) throw new Error('Expected core')
+  const limits = await core.limits('fixture-a')
+  expect([...(await limits.marks())].map(([, until]) => until)).toEqual([
+    301000,
+  ])
+  time = 2000
+  const probe = await send(
+    host,
+    'fixture-a',
+    post(`${origin}/v1`, bearer('fixture-a')),
+  )
+  await (await answer(host, probe, new Response('topped up'))).text()
+  await retry(probe.scope, 200)
+  const route = core.consumers.get('fixture-a')?.routingRows()[0].id
+  if (!route) throw new Error('Expected route')
+  expect(await limits.beforeDispatch(route)).toBe(true)
+  expect([...(await limits.marks())]).toEqual([])
+})
+
+test('a successful balance probe cannot erase an in-flight rate-limit observation', async () => {
+  for (const service of ['fixture-a', 'deepseek']) {
+    let time = 1000
+    const { host, lastCore } = await startServer({
+      table: table.map((entry, index) =>
+        index === 0 ? { ...entry, service } : entry,
+      ),
+      rows: [row('a1'), row('a2')],
+      now: () => time,
+    })
+    const s = scope('fixture-a')
+    const title = await send(
+      host,
+      'fixture-a',
+      post(`${origin}/v1`, bearer('fixture-a')),
+      { ...s, kind: 'title' },
+    )
+    const primary = await send(
+      host,
+      'fixture-a',
+      post(`${origin}/v1`, bearer('fixture-a')),
+      s,
+    )
+    await (await answer(host, title, new Response('healthy title'))).text()
+    const core = lastCore()
+    if (!core) throw new Error('Expected core')
+    const limits = await core.limits('fixture-a')
+    const route = core.consumers.get('fixture-a')?.routingRows()[0].id
+    if (!route) throw new Error('Expected route')
+    // Commit the recovery before the already-dispatched primary reply arrives.
+    // Its observation must retain the limits-registry revision captured before
+    // recovery and its rate-limit cause.
+    await limits.beforeDispatch(route)
+    time = 2000
+    await answer(
+      host,
+      primary,
+      new Response('rate limited', {
+        status: 429,
+        headers: { 'retry-after': '120' },
+      }),
+    )
+    const retry = await trigger(host, 'retry', {
+      sessionID: s.sessionID,
+      agent: s.agent,
+      model: s.model,
+      error: {
+        type: 'provider.rate-limit',
+        message: 'rate limited',
+        status: 429,
+      },
+      attempt: 1,
+      decision: { retry: true, delay: 2000 } as
+        | { retry: true; delay: number }
+        | { retry: false },
+    })
+    expect(retry.decision).toEqual({ retry: true, delay: 0 })
+    const fresh = await send(
+      host,
+      'fixture-a',
+      post(`${origin}/v1`, bearer('fixture-a')),
+    )
+    expect({
+      service,
+      authorization: fresh.request.headers.get('authorization'),
+    }).toEqual({ service, authorization: 'Bearer secret-a2-1' })
+  }
+})
 
 test('responseRetry vetoes only owned local refusals, never identical provider or foreign replies', async () => {
   for (const source of ['local', 'provider', 'foreign'] as const) {
@@ -323,6 +444,7 @@ test('402 HTTP returns a payment-required limit with Retry-After and a balance p
     ['Thu, 01 Jan 1970 00:00:11 GMT', 10000],
     ['0', 0],
   ] as const) {
+    const data: VaultAttempt = {}
     const limit = await adapter.limitFromResponse?.({
       status: 402,
       headers: new Headers(value ? { 'retry-after': value } : {}),
@@ -336,7 +458,7 @@ test('402 HTTP returns a payment-required limit with Retry-After and a balance p
         accountId: 'a1',
         attemptId: 'fixture-attempt',
         transport: 'http',
-        data: {},
+        data,
       },
     })
     expect(limit).toEqual({
@@ -345,7 +467,10 @@ test('402 HTTP returns a payment-required limit with Retry-After and a balance p
       ...(wait === undefined ? {} : { retryAfterMs: wait }),
     })
     if (!limit) throw new Error('missing limit')
-    expect(markUntil(limit, 1000)).toBe(1000 + (wait ?? 300000))
+    if (!data.limit) throw new Error('missing shared limit')
+    expect(limitMarkUntil(data.limit, 'opencode2', 1000)).toBe(
+      1000 + (wait ?? 300000),
+    )
   }
 })
 
