@@ -341,6 +341,7 @@ class PiRuntime {
       entry: served.entry,
       placeholder: served.placeholder,
       consumer: served.consumer,
+      host: 'pi',
       fetch: inner,
       rateLimitMarks: served.marks,
       limits: () => this.#core.limits(served.provider),

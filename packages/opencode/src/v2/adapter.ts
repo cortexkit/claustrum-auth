@@ -1,15 +1,15 @@
+import { randomUUID } from 'node:crypto'
 import {
   type AccountLimits,
-  balanceProbeMs,
   ClaustrumAuthError,
   checkHandshakeOrigin,
+  hasBalanceRule,
   isBalanceFailure,
   isLocalLimitRefusal,
   type LimitObservation,
   limitFromReply,
-  limitMarkUntil,
   localLimitRefusal,
-  orderedRoutes,
+  localLimitRetry,
   type ProviderEntry,
   redactError,
   redactResponse,
@@ -18,14 +18,18 @@ import {
 } from '@cortexkit/claustrum-auth-core'
 import type { ClaustrumScopedAttempt } from '@cortexkit/common-auth/claustrum'
 import {
+  createRequestHistory,
+  decideAfterLimit,
+  type LimitCandidate,
+  markFromSignal,
   type LimitSignal as SharedLimitSignal,
+  statusVaultOrder,
   toOpenCode2LimitSignal,
 } from '@cortexkit/common-auth/limits'
 import {
   type AccountHeadersResult,
   type ChooseAccountResult,
   type EventVerdict,
-  type LimitSignal,
   type OpenCode2AuthAdapter,
   placeholderSecret,
 } from '@cortexkit/common-auth/opencode2'
@@ -51,7 +55,7 @@ export interface VaultAttempt {
   limits?: AccountLimits
   observation?: LimitObservation
   limit?: SharedLimitSignal
-  localRefusal?: boolean
+  localRefusal?: 'leave' | 'veto'
   receipt?: ClaustrumScopedAttempt
   /** The member that issued `receipt`, the only one that may report it. */
   consumer?: ServingConsumer
@@ -259,17 +263,6 @@ export interface VaultAdapterOptions {
   authority?: () => Promise<'vault' | 'local' | 'unreadable'>
 }
 
-const defaultMarkMs = 60_000
-
-/** Until when a limit keeps its account out of routing. */
-export function markUntil(limit: LimitSignal, now: number) {
-  return (
-    now +
-    (limit.retryAfterMs ??
-      (limit.status === 402 ? balanceProbeMs : defaultMarkMs))
-  )
-}
-
 async function rebuild(request: Request, url: URL, headers: Headers) {
   const body =
     request.body === null ? undefined : await request.clone().arrayBuffer()
@@ -292,6 +285,10 @@ export function createVaultAdapter(
   options: VaultAdapterOptions,
 ): OpenCode2AuthAdapter<never, VaultAttempt, ChooseAccountResult> {
   const now = options.now ?? Date.now
+  const localCauses = new Map<
+    string,
+    { until: number; cause?: 'rate-limit' | 'payment-balance' }
+  >()
   const placeholder = placeholderSecret(options.provider)
   const refuse = (error: unknown) => {
     if (
@@ -301,21 +298,6 @@ export function createVaultAdapter(
       options.onRefusal?.(error.code)
     return servingError(error, options.provider, options.entry.origins)
   }
-  const routes = (
-    consumer: ServingConsumer,
-    tried: ReadonlySet<string>,
-    marks: Map<string, number> | undefined,
-  ) =>
-    orderedRoutes(
-      {
-        entry: options.entry,
-        placeholder,
-        consumer,
-        now,
-        rateLimitMarks: marks,
-      },
-      tried,
-    )
   type Adapter = OpenCode2AuthAdapter<never, VaultAttempt, ChooseAccountResult>
   const inspectEvent: Adapter['inspectEvent'] = options.entry.handshakeOrigins
     ?.length
@@ -371,24 +353,96 @@ export function createVaultAdapter(
         if (input.phase === 'retry') return undefined
         throw await noAccount()
       }
-      // Skip accounts a balance 402 or 429 marked. A retry never picks the
-      // refused account again: returning nothing keeps the host's decision.
-      const tried = new Set(
-        input.rerouteFrom ? [input.rerouteFrom.accountId] : [],
-      )
       const limits = await options.limits?.()
-      const marks = limits ? await limits.marks() : options.rateLimitMarks
-      // The shared statusVaultOrder decision still needs payment-aware terminal
-      // history and mark causes. Preserve the existing selection until it can
-      // represent the same balance and mixed-429 outcomes as the core fetch.
-      const next = routes(consumer, tried, marks)[0]
-      if (next !== undefined || input.phase === 'retry') return next
-      // A request with every account marked still goes out on the first one:
-      // the host has already waited its own retry delay, and the provider's
-      // answer, not a stale mark, decides whether the account is still limited.
-      const any = routes(consumer, new Set(), undefined)[0]
-      if (any !== undefined) return any
-      throw await noAccount()
+      const candidates: LimitCandidate[] = limits
+        ? await limits.candidates()
+        : consumer.routingRows().map((row) => {
+            const until = options.rateLimitMarks.get(row.id)
+            const blockers =
+              until !== undefined && until > now()
+                ? [
+                    {
+                      kind: 'hard' as const,
+                      until,
+                      cause:
+                        localCauses.get(row.id)?.until === until
+                          ? localCauses.get(row.id)?.cause
+                          : undefined,
+                    },
+                  ]
+                : []
+            return {
+              account: {
+                namespace: 'claustrum-auth:standalone',
+                accountId: row.id,
+                incarnation: 'standalone',
+              },
+              admitted: true,
+              placementEligible: true,
+              ready: blockers.length === 0,
+              blockers,
+            }
+          })
+      if (!candidates.length) {
+        if (input.phase === 'retry') return undefined
+        throw await noAccount()
+      }
+      const failed = input.rerouteFrom
+      const attempted = candidates.find(
+        (row) => row.account.accountId === failed?.accountId,
+      )?.account
+      const available = candidates.filter(
+        (row) => row.account.accountId !== failed?.accountId,
+      )
+      const selected =
+        available.find((row) => row.ready) ??
+        (input.phase === 'request' ? available[0] : undefined)
+      const decision = decideAfterLimit(
+        {
+          phase: input.phase === 'request' ? 'pre-send' : 'after-limit',
+          host: 'opencode2',
+          hostPhase: input.phase,
+          now: now(),
+          clockNow: now(),
+          sessionId: input.sessionID,
+          requestScope: { kind: 'pool' },
+          // OC2 owns the retry sequence and supplies no turn token here. The
+          // preset leaves terminal history to that host, rather than combining
+          // separate turns that happen to share a session and request kind.
+          history: createRequestHistory({
+            requestId: randomUUID(),
+            originalUrl: '',
+            clockNow: now(),
+          }),
+          attempted,
+          signal:
+            failed && attempted
+              ? {
+                  account: attempted,
+                  kind:
+                    failed.limit.status === 402
+                      ? 'payment-balance'
+                      : 'rate-limit',
+                  reason: failed.limit.reason,
+                  status: failed.limit.status,
+                  retryAfterMs: failed.limit.retryAfterMs,
+                  scope: { kind: 'pool' },
+                  windows: [],
+                  observedAt: now(),
+                }
+              : undefined,
+          delivery: { owned: true, attributable: true, replayable: true },
+          candidates,
+          selection: selected
+            ? { account: selected.account, pin: 'preserve' }
+            : undefined,
+        },
+        statusVaultOrder,
+      )
+      if (decision.action === 'reroute' || decision.action === 'retain')
+        return decision.account.accountId
+      if (decision.hostRetry === 'veto') return { hostRetry: 'veto' }
+      return undefined
     },
     async accountHeaders({
       sessionID,
@@ -500,7 +554,7 @@ export function createVaultAdapter(
       // The installer wraps response streams before rewriteResponse. Capture
       // our in-memory refusal identity first; provider text cannot forge it.
       if (attempt.data && isLocalLimitRefusal(response))
-        attempt.data.localRefusal = true
+        attempt.data.localRefusal = localLimitRetry(response)
       return undefined
     },
     async rewriteResponse({ response, attempt }) {
@@ -508,13 +562,11 @@ export function createVaultAdapter(
       if (!secret) return undefined
       const rewritten = await redactResponse(response, [secret])
       return isLocalLimitRefusal(response)
-        ? localLimitRefusal(rewritten)
+        ? localLimitRefusal(rewritten, localLimitRetry(response))
         : rewritten
     },
     responseRetry({ response, attempt }) {
-      return attempt.data?.localRefusal || isLocalLimitRefusal(response)
-        ? 'veto'
-        : undefined
+      return attempt.data?.localRefusal ?? localLimitRetry(response)
     },
     async limitFromResponse({ status, headers, body, attempt }) {
       if (attempt.data?.localRefusal) return undefined
@@ -539,10 +591,28 @@ export function createVaultAdapter(
     async onAttemptEnd(attempt, outcome) {
       const data = attempt.data
       const parsed = data?.limit
-      if (parsed && data?.limits && data.observation) {
-        const until = limitMarkUntil(parsed, 'opencode2', now())
-        if (until !== undefined) data.limits.mark(data.observation, until)
+      const mark = markFromSignal(parsed, statusVaultOrder.markers.opencode2, {
+        now: now(),
+      })
+      if (mark) {
+        if (data?.limits && data.observation)
+          data.limits.mark(data.observation, mark, parsed?.observedAt)
+        else {
+          options.rateLimitMarks.set(attempt.accountId, mark.until)
+          localCauses.set(attempt.accountId, mark)
+        }
       }
+      if (
+        data?.limits &&
+        data.observation &&
+        hasBalanceRule(options.entry.service) &&
+        !parsed &&
+        ((outcome.status !== undefined &&
+          outcome.status >= 200 &&
+          outcome.status < 300) ||
+          outcome.status === 402)
+      )
+        data.limits.clear(data.observation, 'payment-balance')
       // Only the receipt this attempt was served can be reported, never a
       // row of another provider or plugin. Custody drops a kept receipt's
       // 401 without reporting it, since the vault is unreachable then. On a

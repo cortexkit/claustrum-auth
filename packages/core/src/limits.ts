@@ -3,8 +3,15 @@ import { resolve } from 'node:path'
 import type { ClaustrumConsumer } from '@cortexkit/common-auth/claustrum'
 import {
   acquireLimitsRegistry,
+  buildRefusal,
+  clearLimitsAfterProbe,
+  type HostRetry,
   type IdentityBinding,
+  type LimitCandidate,
+  type LimitDecision,
   type LimitHost,
+  type LimitMark,
+  type LimitMarkCause,
   type LimitSignal,
   type LimitsRegistry,
   markFromSignal,
@@ -12,7 +19,7 @@ import {
   statusVaultOrder,
 } from '@cortexkit/common-auth/limits'
 import { createVaultLimitsAdapter } from '@cortexkit/common-auth/limits/vault'
-import { balanceProbeMs, isBalanceFailure } from './balance.js'
+import { isBalanceFailure } from './balance.js'
 
 export interface ReplyFacts {
   account: IdentityBinding['account']
@@ -85,13 +92,6 @@ export function limitMarkUntil(
   host: LimitHost,
   now: number,
 ) {
-  // statusVaultOrder lacks the shipped five-minute payment default. Keep that
-  // arithmetic until the shared payment marker and refusal contract is extended.
-  if (signal.kind === 'payment-balance')
-    return (
-      (host === 'opencode2' ? now : signal.observedAt) +
-      (signal.retryAfterMs ?? balanceProbeMs)
-    )
   return markFromSignal(signal, statusVaultOrder.markers[host], { now })?.until
 }
 
@@ -99,15 +99,20 @@ export interface LimitObservation {
   binding: IdentityBinding
   baseRevision: number
   observedAt: number
-  hadMark: boolean
+  rateProbe: boolean
 }
 
 export interface AccountLimits {
   marks(): Promise<Map<string, number>>
+  candidates(): Promise<LimitCandidate[]>
   beforeDispatch(route: string): Promise<boolean>
   observe(route: string): LimitObservation
-  mark(observation: LimitObservation, until: number): void
-  clear(observation: LimitObservation): void
+  mark(
+    observation: LimitObservation,
+    mark: LimitMark,
+    evidenceAt?: number,
+  ): void
+  clear(observation: LimitObservation, cause: LimitMarkCause): void
   flush(): Promise<void>
   dispose(): Promise<void>
 }
@@ -151,10 +156,9 @@ export async function createAccountLimits(options: {
     },
   })
   const producerId = randomUUID()
-  // Expiry pruning removes timers from the registry view. Remember which
-  // accounts had one so a successful probe clears with a tombstone, without
-  // turning every healthy request into a control write.
-  const marked = new Set<string>()
+  // Retain observed rate deadlines after expiry pruning only to recognize a
+  // recovery probe; routing still uses the registry's authoritative view.
+  const rateDeadlines = new Map<string, number>()
   const binding = (route: string): IdentityBinding => {
     const row = options.consumer
       .snapshot()
@@ -173,26 +177,55 @@ export async function createAccountLimits(options: {
     }
   }
   const target = { scope: { kind: 'pool' as const }, window: 'retry' }
-  return {
-    async marks() {
-      if (now() - registry.lastReloadAt >= 1000) await registry.reload()
-      const marks = new Map<string, number>()
-      for (const row of options.consumer.routingRows()) {
-        const current = binding(row.id)
-        for (const mark of registry.snapshot.marks) {
-          if (
-            !sameAccount(mark.key.account, current.account) ||
-            mark.key.scope.kind !== 'pool' ||
-            mark.key.window !== 'retry'
-          )
-            continue
-          for (const entry of mark.entries)
-            marks.set(row.id, Math.max(marks.get(row.id) ?? 0, entry.until))
-          marked.add(JSON.stringify(current.account))
-        }
+  const candidates = async (): Promise<LimitCandidate[]> => {
+    if (now() - registry.lastReloadAt >= 1000) await registry.reload()
+    const snapshot = registry.snapshot
+    return options.consumer.routingRows().map((row) => {
+      const current = binding(row.id)
+      const blockers = snapshot.marks
+        .filter(
+          (mark) =>
+            sameAccount(mark.key.account, current.account) &&
+            mark.key.scope.kind === 'pool' &&
+            mark.key.window === 'retry',
+        )
+        .flatMap((mark) =>
+          mark.entries
+            .filter((entry) => entry.until > now())
+            .map((entry) => ({
+              kind: 'hard' as const,
+              until: entry.until,
+              cause: entry.cause,
+            })),
+        )
+      const key = JSON.stringify(current.account)
+      for (const blocker of blockers) {
+        if (blocker.cause === 'rate-limit')
+          rateDeadlines.set(key, blocker.until)
+        else rateDeadlines.delete(key)
       }
+      return {
+        account: current.account,
+        admitted: true,
+        placementEligible: true,
+        ready: blockers.length === 0,
+        blockers,
+      }
+    })
+  }
+  return {
+    candidates,
+    async marks() {
+      const view = await candidates()
       if (registry.lastFailure) options.onError?.(registry.lastFailure)
-      return marks
+      return new Map(
+        view
+          .filter((row) => !row.ready)
+          .map((row) => [
+            row.account.accountId,
+            Math.max(...row.blockers.map((blocker) => blocker.until ?? 0)),
+          ]),
+      )
     },
     async beforeDispatch(route) {
       return !(await registry.beforeDispatch(binding(route))).blocked
@@ -202,46 +235,76 @@ export async function createAccountLimits(options: {
       return {
         ...registry.observe(current),
         observedAt: now(),
-        hadMark: marked.has(JSON.stringify(current.account)),
+        rateProbe:
+          (rateDeadlines.get(JSON.stringify(current.account)) ??
+            Number.POSITIVE_INFINITY) <= now(),
       }
     },
-    mark(observation, until) {
-      marked.add(JSON.stringify(observation.binding.account))
+    mark(observation, mark, evidenceAt = now()) {
+      const key = JSON.stringify(observation.binding.account)
+      if (mark.cause === 'rate-limit') rateDeadlines.set(key, mark.until)
+      else rateDeadlines.delete(key)
       registry.enqueue({
         ...observation,
         producerId,
         operationId: randomUUID(),
         type: 'mark',
         ...target,
-        until,
-        evidenceAt: now(),
-        mergeLaw: 'overwrite',
+        until: mark.until,
+        cause: mark.cause,
+        evidenceAt,
+        mergeLaw: mark.mergeLaw,
       })
     },
-    clear(observation) {
-      marked.delete(JSON.stringify(observation.binding.account))
-      registry.enqueue(
-        {
-          ...observation,
-          producerId,
-          operationId: randomUUID(),
-          type: 'clear',
-          keys: [target],
-          evidenceAt: observation.observedAt,
-        },
-        'success',
-      )
+    clear(observation, cause) {
+      if (cause === 'rate-limit')
+        rateDeadlines.delete(JSON.stringify(observation.binding.account))
+      // A fresh process may start after expiry pruned the timer. Publish a
+      // recovery fence even when no mark remains in its current view.
+      clearLimitsAfterProbe(registry, {
+        ...observation,
+        producerId,
+        operationId: randomUUID(),
+        keys: [target],
+        evidenceAt: observation.observedAt,
+        cause,
+      })
     },
     flush: () => registry.flush(),
     dispose: () => registry.dispose(),
   }
 }
 
-const localRefusals = new WeakSet<Response>()
-export function localLimitRefusal(response: Response) {
-  localRefusals.add(response)
+const localRefusals = new WeakMap<Response, HostRetry>()
+export function localLimitRefusal(
+  response: Response,
+  hostRetry: HostRetry = 'veto',
+) {
+  localRefusals.set(response, hostRetry)
   return response
 }
 export function isLocalLimitRefusal(response: Response) {
   return localRefusals.has(response)
+}
+export function localLimitRetry(response: Response) {
+  return localRefusals.get(response)
+}
+
+export function limitRefusal(
+  decision: Extract<LimitDecision, { action: 'refuse' }>,
+  host: LimitHost,
+  now: number,
+) {
+  if (
+    decision.family !== 'claustrum-429' &&
+    decision.family !== 'claustrum-402'
+  )
+    throw new Error('claustrum-auth: unsupported limit refusal family')
+  const wire = buildRefusal({ ...decision, family: decision.family, host, now })
+  if (wire.kind !== 'http')
+    throw new Error('claustrum-auth: unsupported limit refusal')
+  return localLimitRefusal(
+    new Response(wire.body, { status: wire.status, headers: wire.headers }),
+    wire.hostRetry,
+  )
 }

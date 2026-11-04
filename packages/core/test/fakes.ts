@@ -67,8 +67,12 @@ export function row(
   })
 }
 
-export async function harness(rows = [row('a')], host: Host = 'opencode1') {
-  return withTable(rows, host, fixtureEntries, 'fixture-a')
+export async function harness(
+  rows = [row('a')],
+  host: Host = 'opencode1',
+  now?: () => number,
+) {
+  return withTable(rows, host, fixtureEntries, 'fixture-a', now)
 }
 
 // The same harness over the shipped table: the hub's members and the vault
@@ -90,6 +94,7 @@ async function withTable(
   host: Host,
   table: readonly ProviderEntry[],
   firstMember: string,
+  now?: () => number,
 ) {
   // common-auth writes these files owner-only and refuses a parent folder that
   // other users may change. A Windows CI checkout (D:\a\...) is such a folder,
@@ -159,6 +164,7 @@ async function withTable(
       tokenPath,
       connect: async () => client,
       isCustodyActive: () => active,
+      now,
       facts: {
         host,
         catalog,

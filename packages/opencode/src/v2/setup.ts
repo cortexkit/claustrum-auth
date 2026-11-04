@@ -23,7 +23,6 @@ import {
   checkOwnedHandshake,
   createHandshakeState,
   createVaultAdapter,
-  markUntil,
   redactFrame,
   socketKey,
   type VaultAttempt,
@@ -311,9 +310,6 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
         scoped,
       )
       disposers.push(() => receiveHook.dispose())
-      installation.on('limit', (event) => {
-        marks.set(event.accountId, markUntil(event.limit, now()))
-      })
       deps.observe?.(provider, installation)
     }
   } catch (error) {

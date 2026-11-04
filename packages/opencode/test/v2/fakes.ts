@@ -277,6 +277,8 @@ export async function startServer(
     offline?: boolean
     mode?: 'vault' | 'local'
     table?: readonly ProviderEntry[]
+    now?: () => number
+    observe?: ServerDeps['observe']
     /**
      * Receives a mark as each setup phase ends, for a test's phase clock. The
      * token write is one owner-only private write, so its mark carries that
@@ -370,6 +372,8 @@ export async function startServer(
   // the plugin holds.
   let core: ReturnType<typeof createTestCore> | undefined
   const deps: ServerDeps = {
+    now: options.now,
+    observe: options.observe,
     table: options.table ?? table,
     authority: async () => vault.mode,
     createCore: (facts) => {
@@ -378,6 +382,7 @@ export async function startServer(
           facts,
           stateDir: dir,
           tokenPath,
+          now: options.now,
           isCustodyActive: () => vault.mode === 'vault',
           connect: async () => {
             vault.connects++
