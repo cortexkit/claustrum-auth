@@ -80,6 +80,7 @@ Command per provider (the method id is `claustrum-auth`):
 | cline-pass | `opencode auth login cline-pass --method claustrum-auth` |
 | kimi-coding | `opencode auth login kimi-code-plan-global --method claustrum-auth` |
 | minimax-coding-plan | `opencode auth login minimax-coding-plan --method claustrum-auth` |
+| ollama-cloud | `opencode auth login ollama-cloud --method claustrum-auth` |
 | openrouter | `opencode auth login openrouter --method claustrum-auth` |
 | synthetic | `opencode auth login synthetic --method claustrum-auth` |
 | typesafe | `opencode auth login typesafe --method claustrum-auth` |
@@ -136,6 +137,7 @@ a slash command, because OpenCode 1 has one auth hook per provider:
 | cline-pass | `/claustrum use cline-pass` |
 | kimi-coding | `/claustrum use kimi-code-plan-global` |
 | minimax-coding-plan | Not served: `not-on-this-host` (driver sends `x-api-key`) |
+| ollama-cloud | `/claustrum use ollama-cloud` |
 | openrouter | `/claustrum use openrouter` |
 | synthetic | `/claustrum use synthetic` |
 | typesafe | `/claustrum use typesafe` |
@@ -178,8 +180,8 @@ Command per provider (Pi's own ids):
 | opencode-go | `/claustrum use opencode-go` |
 | opencode-zen | `/claustrum use opencode` |
 
-typesafe, inception, cline-pass, synthetic and minimax-coding-plan are not
-listed on Pi: Pi's catalog has no inception, cline-pass or synthetic provider
+typesafe, inception, cline-pass, ollama-cloud, synthetic and minimax-coding-plan are not
+listed on Pi: Pi's catalog has no inception, cline-pass, ollama-cloud or synthetic provider
 at all, and it registers typesafe with an api that does not go through the
 plugin's fetch (`docs/providers.md`). For MiniMax, it registers only `minimax`
 and `minimax-cn`, not `minimax-coding-plan`.

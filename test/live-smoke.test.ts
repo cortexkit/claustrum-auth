@@ -16,6 +16,7 @@ import {
   matrix,
   options,
   preview,
+  providerID,
   removeLegacyPiCaps,
   runSmoke,
   safe,
@@ -135,6 +136,25 @@ describe('live smoke safety', () => {
       expect(() =>
         options(['--host', host, '--provider', 'minimax-coding-plan'], env),
       ).toThrow(`ProviderNotListed:${host}`)
+  })
+  test('Ollama Cloud smoke is selectable on both OpenCode hosts but not Pi', () => {
+    const home = mkdtempSync(path.join(scratch, 'ollama-cloud-'))
+    const env = {
+      LIVE_HOME: home,
+      CLAUSTRUM_SUBC_CONNECTION: path.join(home, 'connection.json'),
+    }
+    expect(matrix('opencode1')).toContain('ollama-cloud')
+    expect(matrix('opencode2')).toContain('ollama-cloud')
+    expect(matrix('pi')).not.toContain('ollama-cloud')
+    expect(options(['--provider', 'ollama-cloud'], env)).toMatchObject({
+      hosts: ['opencode1', 'opencode2'],
+      provider: 'ollama-cloud',
+    })
+    expect(providerID('opencode1', 'ollama-cloud')).toBe('ollama-cloud')
+    expect(providerID('opencode2', 'ollama-cloud')).toBe('ollama-cloud')
+    expect(() =>
+      options(['--host', 'pi', '--provider', 'ollama-cloud'], env),
+    ).toThrow('ProviderNotListed:pi')
   })
   test('selects lowest catalog price and excludes Anthropic from bearer-only providers', () => {
     expect(

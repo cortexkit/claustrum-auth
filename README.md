@@ -32,6 +32,7 @@ The entries below come from the [provider table](packages/core/src/providers.ts)
 | Inception | `inception` | `inception` | — |
 | Kimi Code | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` |
 | MiniMax Token Plan | — | `minimax-coding-plan` | — |
+| Ollama Cloud | `ollama-cloud` | `ollama-cloud` | — |
 | OpenRouter | `openrouter` | `openrouter` | `openrouter` |
 | Synthetic | `synthetic` | `synthetic` | — |
 | Meta | `meta` | `meta` | `meta` |

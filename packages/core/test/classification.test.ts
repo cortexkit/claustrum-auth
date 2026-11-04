@@ -43,7 +43,7 @@ function fact(
   }
 }
 
-test('33 inventory rows classify per host without parsing credential ids', () => {
+test('34 inventory rows classify per host without parsing credential ids', () => {
   const rows: {
     value: VaultRowFacts
     expected: (host: Host) => ReturnType<typeof classifyRow>
@@ -89,6 +89,7 @@ test('33 inventory rows classify per host without parsing credential ids', () =>
     'inception',
     'kimi-code-plan-global',
     'minimax-coding-plan',
+    'ollama-cloud',
     'openrouter',
     'synthetic',
     'typesafe',
@@ -103,7 +104,13 @@ test('33 inventory rows classify per host without parsing credential ids', () =>
           (host !== 'opencode2' && id === 'minimax-coding-plan') ||
           (host === 'opencode2' && id === 'opencode') ||
           (host === 'pi' &&
-            ['cline-pass', 'inception', 'synthetic', 'typesafe'].includes(id))
+            [
+              'cline-pass',
+              'inception',
+              'ollama-cloud',
+              'synthetic',
+              'typesafe',
+            ].includes(id))
         )
           return { kind: 'refused', code: 'not-on-this-host' }
         // Rows carry fleet ids; two services have other ids on the hosts.
@@ -118,7 +125,7 @@ test('33 inventory rows classify per host without parsing credential ids', () =>
       },
     })
   }
-  expect(rows).toHaveLength(33)
+  expect(rows).toHaveLength(34)
   for (const host of hosts)
     for (const item of rows)
       expect(classifyRow(item.value, facts(host), catalogEntries)).toEqual(
@@ -255,6 +262,7 @@ test('reserved matrix never admits reserved providers alone or beside others', (
     'inception',
     'kimi-coding',
     'minimax-coding-plan',
+    'ollama-cloud',
     'openrouter',
     'synthetic',
     'typesafe',

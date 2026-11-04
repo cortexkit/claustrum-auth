@@ -28,6 +28,7 @@ const providers = [
   'cline-pass',
   'kimi-coding',
   'minimax-coding-plan',
+  'ollama-cloud',
   'openrouter',
   'synthetic',
   'typesafe',
@@ -40,7 +41,13 @@ export function matrix(host: Host) {
   return providers.filter(
     (p) =>
       (host !== 'pi' ||
-        !['inception', 'cline-pass', 'synthetic', 'typesafe'].includes(p)) &&
+        ![
+          'inception',
+          'cline-pass',
+          'ollama-cloud',
+          'synthetic',
+          'typesafe',
+        ].includes(p)) &&
       (p !== 'minimax-coding-plan' || host === 'opencode2'),
   )
 }

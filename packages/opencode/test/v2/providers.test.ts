@@ -54,6 +54,7 @@ test('the published entry registers the shipped providers, and no fixture provid
     ),
   ]).toEqual(expected)
   expect(expected.some((id) => id.startsWith('fixture-'))).toBe(false)
+  expect(host.methods.has(`ollama-cloud:${vaultMethodId}`)).toBe(true)
 })
 
 test('opencode-zen gets no login method on OpenCode 2 even when the host knows it; xai does', async () => {

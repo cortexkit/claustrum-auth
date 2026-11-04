@@ -121,6 +121,13 @@ export const supportedProviders: readonly ProviderEntry[] = [
     origins: ['https://api.minimax.io'],
   },
   {
+    service: 'ollama-cloud',
+    ids: ['ollama-cloud'],
+    hosts: { opencode1: 'ollama-cloud', opencode2: 'ollama-cloud' },
+    class: 'A',
+    origins: ['https://ollama.com'],
+  },
+  {
     service: 'openrouter',
     ids: ['openrouter'],
     hosts: {

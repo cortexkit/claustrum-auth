@@ -17,6 +17,7 @@ vault row must look like for the provider to be served.
 | inception | `inception` | `inception` | `inception` | — | `https://api.inceptionlabs.ai` |
 | kimi-coding | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-code-plan-global` | `kimi-coding` | `https://api.kimi.com`, `https://api.kimi.ai` |
 | minimax-coding-plan | `minimax-coding-plan` | — | `minimax-coding-plan` | — | `https://api.minimax.io` |
+| ollama-cloud | `ollama-cloud` | `ollama-cloud` | `ollama-cloud` | — | `https://ollama.com` |
 | openrouter | `openrouter` | `openrouter` | `openrouter` | `openrouter` | `https://openrouter.ai` |
 | synthetic | `synthetic` | `synthetic` | `synthetic` | — | `https://api.synthetic.new` |
 | typesafe | `typesafe` | `typesafe` | `typesafe` | — | `https://api.typesafe.ai` |
@@ -83,6 +84,9 @@ pins, which carry the catalogs the hosts themselves use:
   `openai-responses` is not listed there.
 - **OpenCode 2** `@opencode/ai` 2.2.0, `dist/providers/*.js` (the driver
   defaults and the auth option each route uses).
+  Ollama Cloud was also checked against the installed `@opencode/cli` 2.2.3
+  catalog and `@opencode/core` / `@opencode/ai` 2.2.3 (below); the e2e fixture
+  remains pinned to 2.2.0.
 - **OpenCode 1** uses the same provider ids as OpenCode 2 where served: the table gives it
   the OpenCode ids, and its entry wraps every listed provider's
   `options.fetch` (`packages/opencode/src/v1/plugin.ts`). Its transport audit
@@ -99,6 +103,7 @@ pins, which carry the catalogs the hosts themselves use:
 | inception | absent from Pi's catalog | `providers/openai-compatible.js` with the catalog's `api.inceptionlabs.ai` base | yes (OpenAI-compatible bearer) |
 | kimi-coding | `kimi-coding`, base `https://api.kimi.com/coding/v1`, `openai-completions` | `providers/moonshot/chat.js` (the host routes `kimi-code-plan-global` through it); the catalog supplies the regional base | yes |
 | minimax-coding-plan | not in Pi 1.3.0's `dist/providers/all.js` | `providers/minimax.js:64-76`, bearer on chat, messages and responses. Catalog bases `https://api.minimax.io/v1` and `https://api.minimax.io/anthropic/v1` | OpenCode 2 yes. OpenCode 1 sends `x-api-key` |
+| ollama-cloud | no registration in pi-ai 1.3.0 `dist/providers/all.js` | `@opencode/ai` 2.2.3 `providers/openai-compatible.js:11`, `AuthOptions.bearer`; catalog base `https://ollama.com/v1` | yes (OpenAI-compatible bearer) |
 | openrouter | `openrouter`, base `https://openrouter.ai/api/v1` | `providers/openrouter.js`, base `https://openrouter.ai/api/v1` | yes |
 | synthetic | no registration in pi-ai 1.3.0 `dist/providers/all.js` | `providers/openai-compatible.js:11`, `AuthOptions.bearer`, catalog base `https://api.synthetic.new/openai/v1` | yes |
 | typesafe | `typesafe`, base `https://api.typesafe.ai/v1/`, api `typesafe-system-one` | `providers/typesafe-ai.js`, base `https://api.typesafe.ai/v1`, `AuthOptions.bearer` | OpenCode yes; Pi's api does not take a caller `fetch` |
@@ -108,6 +113,34 @@ pins, which carry the catalogs the hosts themselves use:
 | opencode-zen | `opencode` (`providers/opencode.js`), five apis, models at `https://opencode.ai/inference` (see below) | `providers/opencode.js` (TypeSafe System One at `https://opencode.ai/inference/systemone/v1`, bearer) plus per-model drivers | per model |
 
 Host rules that follow:
+
+- **Ollama Cloud is OpenCode only.** The [models.dev catalog](https://models.dev/api.json)
+  lists `$.ollama-cloud` with `env: ["OLLAMA_API_KEY"]`,
+  `npm: @ai-sdk/openai-compatible` and `api: https://ollama.com/v1`, so
+  OpenCode 1 uses the host id `ollama-cloud` with a bearer driver.
+  The installed `@opencode/cli` 2.2.3 catalog was queried in an isolated
+  profile with model fetching disabled and a non-secret placeholder in
+  `OLLAMA_API_KEY`: `GET /api/provider` returns `id` and `integrationID`
+  `ollama-cloud`, package `@opencode/ai/providers/openai-compatible`, and
+  `settings.baseURL: https://ollama.com/v1`. `GET /api/model` includes the
+  enabled model `ollama-cloud/gemma4:31b` with that package and base URL.
+  The published [`@opencode/core` 2.2.3 package](https://www.npmjs.com/package/@opencode/core/v/2.2.3)
+  contains the same provider and environment key in its bundled snapshot,
+  `dist/chunks/usage-limits-jnc77vb7.js:63`.
+  [`@opencode/ai` 2.2.3](https://www.npmjs.com/package/@opencode/ai/v/2.2.3)
+  `dist/providers/openai-compatible.js:8-16` applies `AuthOptions.bearer`
+  to the chat-completions route.
+  Pi-ai 1.3.0 has neither `ollama-cloud` nor `ollama` in
+  `dist/providers/all.js` or `dist/models.generated.js`; its README's custom
+  local `ollama` example is not a built-in Cloud provider. Pi therefore
+  refuses the vault row as `not-on-this-host`.
+  Ollama's official [base URLs](https://docs.ollama.com/api/introduction#base-urls),
+  [OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility#direct-cloud-access)
+  and [authentication](https://docs.ollama.com/api/authentication#api-keys)
+  docs specify `https://ollama.com/v1` and `Authorization: Bearer` for
+  direct cloud inference. Only `https://ollama.com` is allowed: neither the
+  checked catalog nor those docs names `https://api.ollama.com` as the
+  Cloud OpenAI-compatible endpoint.
 
 - **Synthetic is OpenCode only.** The [models.dev catalog](https://models.dev/api.json),
   read 2026-11-01T09:50:41Z, lists `synthetic` at `$.synthetic` with 12 models.
@@ -418,6 +451,7 @@ select the provider either.
 | `apikey:fireworks-ai` | `fireworks-ai` | `llm-provider` | `fireworks-ai` on OpenCode 1 and 2, `fireworks` on Pi |
 | `apikey:inception` | `inception` | `llm-provider` | inception on OpenCode 1 and 2; refused `not-on-this-host` on Pi |
 | `apikey:minimax-coding-plan` | `minimax-coding-plan` | `llm-provider` | minimax-coding-plan on OpenCode 2. Refused `not-on-this-host` on OpenCode 1 and Pi |
+| `apikey:ollama-cloud` | `ollama-cloud` | `llm-provider,web-search` | ollama-cloud on OpenCode 1 and 2; refused `not-on-this-host` on Pi. The extra `web-search` category does not change classification |
 | `apikey:openrouter` | `openrouter` | `llm-provider` | openrouter on every host |
 | `apikey:synthetic` | `synthetic` | `llm-provider` | synthetic on OpenCode 1 and 2. Pi refuses `not-on-this-host` |
 | `apikey:typesafe` | `typesafe` | `llm-provider` | allowlisted on OpenCode 1 and 2, but unavailable in the checked catalogs; OpenCode 2 refuses `unknown-to-host`, Pi `not-on-this-host` |

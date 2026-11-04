@@ -65,6 +65,15 @@ const vaultRows: {
         : { kind: 'mine', member: 'inception' },
   },
   {
+    credential: 'apikey:ollama-cloud',
+    providerIds: ['ollama-cloud'],
+    categories: ['llm-provider', 'web-search'],
+    expected: (host) =>
+      host === 'pi'
+        ? { kind: 'refused', code: 'not-on-this-host' }
+        : { kind: 'mine', member: 'ollama-cloud' },
+  },
+  {
     credential: 'apikey:openrouter',
     providerIds: ['openrouter'],
     expected: () => ({ kind: 'mine', member: 'openrouter' }),
@@ -163,6 +172,7 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     'inception',
     'kimi-coding',
     'minimax-coding-plan',
+    'ollama-cloud',
     'openrouter',
     'synthetic',
     'typesafe',
@@ -199,6 +209,7 @@ test('every live entry maps its fleet ids to a host id on each host it lists', (
     fireworks: 'fireworks-ai',
     inception: 'inception',
     'kimi-coding': 'kimi-code-plan-global',
+    'ollama-cloud': 'ollama-cloud',
     openrouter: 'openrouter',
     synthetic: 'synthetic',
     typesafe: 'typesafe',
@@ -241,6 +252,7 @@ test('each shipped origin is the provider API host, and no other host of it is a
     inception: ['https://api.inceptionlabs.ai'],
     'kimi-coding': ['https://api.kimi.com', 'https://api.kimi.ai'],
     'minimax-coding-plan': ['https://api.minimax.io'],
+    'ollama-cloud': ['https://ollama.com'],
     openrouter: ['https://openrouter.ai'],
     synthetic: ['https://api.synthetic.new'],
     typesafe: ['https://api.typesafe.ai'],
@@ -263,6 +275,66 @@ test('the operator vault rows route to their provider on every host, and nowhere
     }
   }
 })
+
+test.each(hosts)(
+  'Ollama Cloud on %s serves only its exact origin or refuses the absent host',
+  async (host) => {
+    const item = vaultRows.find(
+      (item) => item.credential === 'apikey:ollama-cloud',
+    )
+    if (!item) throw new Error('missing Ollama Cloud vault row')
+    expect(
+      classifyRow(facts(item), publishedFacts(host, ['ollama-cloud'])),
+    ).toEqual(item.expected(host))
+    if (host === 'pi') return
+    const h = await liveHarness(
+      [
+        row(item.credential, {
+          providerIds: item.providerIds,
+          categories: item.categories,
+        }),
+      ],
+      host,
+    )
+    const entry = tableByService.get('ollama-cloud')
+    const consumer = h.consumers.get('ollama-cloud')
+    if (!entry || !consumer) throw new Error('missing Ollama Cloud member')
+    let sends = 0
+    const fetch = createFetch({
+      entry,
+      consumer,
+      placeholder,
+      fetch: async (input) => {
+        const request = input as Request
+        expect(request.url).toBe('https://ollama.com/v1/chat/completions')
+        expect(request.headers.get('authorization')).toBe(
+          `Bearer ${h.secretOf(item.credential)}`,
+        )
+        sends++
+        return new Response('ok')
+      },
+    })
+    expect(
+      await (
+        await fetch('https://ollama.com/v1/chat/completions', {
+          headers: bearer,
+        })
+      ).text(),
+    ).toBe('ok')
+    const reads = h.reads.length
+    for (const origin of [
+      'https://ollama.com.evil',
+      'https://api.ollama.com',
+      'https://ollama.com:8443',
+      'http://ollama.com',
+    ])
+      await expect(
+        fetch(`${origin}/v1/chat/completions`, { headers: bearer }),
+      ).rejects.toMatchObject({ code: 'origin-refused' })
+    expect(h.reads).toHaveLength(reads)
+    expect(sends).toBe(1)
+  },
+)
 
 test.each(hosts)(
   'Synthetic on %s serves only its exact origin or refuses the absent host',
