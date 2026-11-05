@@ -13,6 +13,7 @@ import {
   type LimitMark,
   type LimitMarkCause,
   type LimitSignal,
+  type LimitsNamespace,
   type LimitsRegistry,
   markFromSignal,
   sameAccount,
@@ -101,6 +102,7 @@ export interface LimitObservation {
   baseRevision: number
   observedAt: number
   rateProbe: boolean
+  paymentProbe: boolean
 }
 
 export interface AccountLimits {
@@ -141,9 +143,26 @@ export async function createAccountLimits(options: {
     path: options.path,
     now,
   })
+  const producerId = randomUUID()
+  let hydrated: LimitsNamespace | undefined
   const registry: LimitsRegistry = await acquireLimitsRegistry({
-    adapter,
+    adapter: {
+      ...adapter,
+      async read(previous) {
+        const view = await adapter.read(previous)
+        if (view.authoritative) hydrated = view.snapshot
+        return view
+      },
+    },
     isAccessRestrictive: () => false,
+    onRejected(command) {
+      if (command.producerId === producerId && command.type === 'clear') {
+        // A rejected clear did not consume recovery evidence. Let the next
+        // accepted view re-arm its probe instead of suppressing recovery.
+        seenEvidence.delete(probeKey(command.binding.account))
+        consumedHydration = undefined
+      }
+    },
     clock: {
       now,
       setTimeout(callback, delay) {
@@ -156,10 +175,77 @@ export async function createAccountLimits(options: {
       },
     },
   })
-  const producerId = randomUUID()
-  // Retain observed rate deadlines after expiry pruning only to recognize a
-  // recovery probe; routing still uses the registry's authoritative view.
+  // An existing owner can supply the registry without using this adapter.
+  // Read its initial recovery evidence once, never once per provider request.
+  if (!hydrated) {
+    try {
+      const view = await adapter.read()
+      if (view.authoritative) hydrated = view.snapshot
+    } catch (error) {
+      await registry.dispose().catch(() => {})
+      throw error
+    }
+  }
+  // Recovery evidence survives expiry pruning, but never controls eligibility.
+  // Remember each mark only once so a consumed clear cannot re-arm itself.
   const rateDeadlines = new Map<string, number>()
+  const paymentDeadlines = new Map<string, number>()
+  const seenEvidence = new Map<string, string>()
+  let consumedHydration: string | undefined
+  const probeKey = (account: IdentityBinding['account']) =>
+    JSON.stringify([account.namespace, account.accountId, account.incarnation])
+  const retainDeadline = (
+    key: string,
+    cause: LimitMarkCause | undefined,
+    until: number,
+  ) => {
+    rateDeadlines.delete(key)
+    paymentDeadlines.delete(key)
+    if (cause === 'rate-limit') rateDeadlines.set(key, until)
+    if (cause === 'payment-balance') paymentDeadlines.set(key, until)
+  }
+  const remember = (snapshot: LimitsNamespace) => {
+    for (const mark of snapshot.marks) {
+      if (mark.key.scope.kind !== 'pool' || mark.key.window !== 'retry')
+        continue
+      const key = probeKey(mark.key.account)
+      for (const entry of mark.entries) {
+        if (!Number.isFinite(entry.until)) continue
+        // A pending mark can receive a different committed revision on flush.
+        // Its original observation still needs only one recovery clear.
+        const evidence = JSON.stringify([
+          snapshot.generation,
+          entry.baseRevision,
+          entry.evidenceAt,
+          entry.until,
+          entry.cause,
+        ])
+        if (seenEvidence.get(key) === evidence) continue
+        seenEvidence.set(key, evidence)
+        retainDeadline(key, entry.cause, entry.until)
+      }
+    }
+  }
+  const snapshotWithProbeEvidence = () => {
+    const snapshot = registry.snapshot
+    // The adapter's authoritative load retains expired entries; the registry's
+    // public view prunes them. Only consume a load the registry accepted, not a
+    // stale read that completed after a newer commit.
+    if (
+      hydrated &&
+      hydrated.namespace === snapshot.namespace &&
+      hydrated.generation === snapshot.generation &&
+      hydrated.revision === snapshot.revision
+    ) {
+      const key = JSON.stringify([hydrated.generation, hydrated.revision])
+      if (consumedHydration !== key) {
+        consumedHydration = key
+        remember(hydrated)
+      }
+    }
+    remember(snapshot)
+    return snapshot
+  }
   const binding = (route: string): IdentityBinding => {
     const row = options.consumer
       .snapshot()
@@ -180,7 +266,7 @@ export async function createAccountLimits(options: {
   const target = { scope: { kind: 'pool' as const }, window: 'retry' }
   const candidates = async (): Promise<LimitCandidate[]> => {
     if (now() - registry.lastReloadAt >= 1000) await registry.reload()
-    const snapshot = registry.snapshot
+    const snapshot = snapshotWithProbeEvidence()
     return options.consumer.routingRows().map((row) => {
       const current = binding(row.id)
       const blockers = snapshot.marks
@@ -199,12 +285,6 @@ export async function createAccountLimits(options: {
               cause: entry.cause,
             })),
         )
-      const key = JSON.stringify(current.account)
-      for (const blocker of blockers) {
-        if (blocker.cause === 'rate-limit')
-          rateDeadlines.set(key, blocker.until)
-        else rateDeadlines.delete(key)
-      }
       return {
         account: current.account,
         admitted: true,
@@ -232,19 +312,20 @@ export async function createAccountLimits(options: {
       return !(await registry.beforeDispatch(binding(route))).blocked
     },
     observe(route) {
+      snapshotWithProbeEvidence()
       const current = binding(route)
       return {
         ...registry.observe(current),
         observedAt: now(),
         rateProbe:
-          (rateDeadlines.get(JSON.stringify(current.account)) ??
+          (rateDeadlines.get(probeKey(current.account)) ??
             Number.POSITIVE_INFINITY) <= now(),
+        paymentProbe: paymentDeadlines.has(probeKey(current.account)),
       }
     },
     mark(observation, mark, evidenceAt = now()) {
-      const key = JSON.stringify(observation.binding.account)
-      if (mark.cause === 'rate-limit') rateDeadlines.set(key, mark.until)
-      else rateDeadlines.delete(key)
+      const key = probeKey(observation.binding.account)
+      retainDeadline(key, mark.cause, mark.until)
       registry.enqueue({
         ...observation,
         producerId,
@@ -259,7 +340,9 @@ export async function createAccountLimits(options: {
     },
     clear(observation, cause) {
       if (cause === 'rate-limit')
-        rateDeadlines.delete(JSON.stringify(observation.binding.account))
+        rateDeadlines.delete(probeKey(observation.binding.account))
+      if (cause === 'payment-balance')
+        paymentDeadlines.delete(probeKey(observation.binding.account))
       // A fresh process may start after expiry pruned the timer. Publish a
       // recovery fence even when no mark remains in its current view.
       clearLimitsAfterProbe(registry, {

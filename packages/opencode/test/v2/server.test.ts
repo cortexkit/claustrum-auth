@@ -1,9 +1,18 @@
 import { expect, test } from 'bun:test'
 import {
+  limitFromReply,
   limitMarkUntil,
   localLimitRefusal,
 } from '@cortexkit/claustrum-auth-core'
-import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
+import {
+  ClaustrumConsumerError,
+  readVaultRoster,
+} from '@cortexkit/common-auth/claustrum'
+import {
+  type LimitsNamespace,
+  markFromSignal,
+  statusVaultOrder,
+} from '@cortexkit/common-auth/limits'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import {
   createVaultAdapter,
@@ -29,6 +38,218 @@ const bearer = (provider: string) => ({
 const balanceTable = table.map((entry, index) =>
   index === 0 ? { ...entry, service: 'deepseek' } : entry,
 )
+
+test('20 healthy DeepSeek requests commit no limit state on OpenCode 2', async () => {
+  const { host, vault, lastCore } = await startServer({
+    table: balanceTable,
+    rows: [row('a1')],
+    now: () => 1000,
+  })
+  await login(host, 'fixture-a')
+  const core = lastCore()
+  if (!core) throw new Error('Expected core')
+  const limits = await core.limits('fixture-a')
+  const path = core.hub.rosterPath('fixture-a')
+  const before = (await readVaultRoster(path))?.limits as
+    | LimitsNamespace
+    | undefined
+  const revision = before?.revision ?? 0
+  expect(revision).toBe(0)
+  let last = scope('fixture-a')
+  for (let request = 0; request < 20; request++) {
+    const sent = await send(
+      host,
+      'fixture-a',
+      post(`${origin}/v1`, bearer('fixture-a')),
+    )
+    expect(
+      await (await answer(host, sent, new Response('healthy'))).text(),
+    ).toBe('healthy')
+    last = sent.scope
+  }
+  await trigger(host, 'retry', {
+    sessionID: last.sessionID,
+    agent: last.agent,
+    model: last.model,
+    error: {
+      type: 'provider.unknown',
+      message: 'response completed',
+      status: 200,
+    },
+    attempt: 1,
+    decision: { retry: false },
+  })
+  await limits.flush()
+  const after = (await readVaultRoster(path))?.limits as
+    | LimitsNamespace
+    | undefined
+  expect(vault.reads).toHaveLength(20)
+  expect(after?.revision ?? 0).toBe(revision)
+  expect(after?.operationIds.length ?? 0).toBe(0)
+})
+
+test('OpenCode 2 payment recovery clears once across subsequent healthy requests', async () => {
+  for (const transport of ['http', 'ws']) {
+    let time = 1000
+    const { host, lastCore } = await startServer({
+      table: socketTable.map((entry, index) =>
+        index === 0 ? { ...entry, service: 'deepseek' } : entry,
+      ),
+      rows: [row('a1')],
+      now: () => time,
+    })
+    await login(host, 'fixture-a')
+    const core = lastCore()
+    if (!core) throw new Error('Expected core')
+    const limits = await core.limits('fixture-a')
+    const path = core.hub.rosterPath('fixture-a')
+    const perform = async (status: number) => {
+      const s = scope('fixture-a')
+      if (transport === 'http') {
+        const sent = await send(
+          host,
+          'fixture-a',
+          post(`${origin}/v1`, bearer('fixture-a')),
+          s,
+        )
+        await (
+          await answer(host, sent, new Response('provider reply', { status }))
+        ).text()
+      } else {
+        await handshake(host, 'fixture-a', socketURL, s)
+        await receive(
+          host,
+          s,
+          status === 402
+            ? '{"type":"error","status":402,"error":{"code":"payment_required"}}'
+            : '{"type":"response.completed"}',
+        )
+      }
+      await trigger(host, 'retry', {
+        sessionID: s.sessionID,
+        agent: s.agent,
+        model: s.model,
+        error: {
+          type: 'provider.unknown',
+          message: 'response completed',
+          status,
+        },
+        attempt: 1,
+        decision: { retry: false },
+      })
+    }
+    await perform(402)
+    await limits.flush()
+    time = 2000
+    await perform(200)
+    await limits.flush()
+    const recovered = (await readVaultRoster(path))?.limits as
+      | LimitsNamespace
+      | undefined
+    expect(recovered?.revision).toBe(2)
+    for (let request = 0; request < 20; request++) await perform(200)
+    await limits.flush()
+    const after = (await readVaultRoster(path))?.limits as
+      | LimitsNamespace
+      | undefined
+    expect({ transport, revision: after?.revision }).toEqual({
+      transport,
+      revision: 2,
+    })
+    expect(after?.operationIds).toHaveLength(2)
+  }
+})
+
+test('an expired OpenCode 2 rate probe clears once and fences delayed rate evidence', async () => {
+  for (const transport of ['http', 'ws']) {
+    let time = 1000
+    const { host, lastCore } = await startServer({
+      table: socketTable,
+      rows: [row('a1')],
+      now: () => time,
+    })
+    await login(host, 'fixture-a')
+    const core = lastCore()
+    if (!core) throw new Error('Expected core')
+    const limits = await core.limits('fixture-a')
+    const route = core.consumers.get('fixture-a')?.routingRows()[0].id
+    if (!route) throw new Error('Expected route')
+    const delayed = limits.observe(route)
+    const perform = async (status: number) => {
+      const s = scope('fixture-a')
+      if (transport === 'http') {
+        const sent = await send(
+          host,
+          'fixture-a',
+          post(`${origin}/v1`, bearer('fixture-a')),
+          s,
+        )
+        await (
+          await answer(
+            host,
+            sent,
+            new Response('provider reply', {
+              status,
+              headers: status === 429 ? { 'retry-after': '17' } : {},
+            }),
+          )
+        ).text()
+      } else {
+        await handshake(host, 'fixture-a', socketURL, s)
+        await receive(
+          host,
+          s,
+          status === 429
+            ? '{"type":"error","status":429,"error":{"code":"rate_limit_exceeded"}}'
+            : '{"type":"response.completed"}',
+        )
+      }
+      await trigger(host, 'retry', {
+        sessionID: s.sessionID,
+        agent: s.agent,
+        model: s.model,
+        error: {
+          type: 'provider.unknown',
+          message: 'response completed',
+          status,
+        },
+        attempt: 1,
+        decision: { retry: false },
+      })
+    }
+    await perform(429)
+    const until = transport === 'http' ? 18000 : 61000
+    time = 2000
+    await perform(200)
+    expect([...(await limits.marks())].map(([, deadline]) => deadline)).toEqual(
+      [until],
+    )
+    time = until
+    await perform(200)
+    await limits.beforeDispatch(route)
+    const response = new Response('delayed rate refusal', {
+      status: 429,
+      headers: { 'retry-after': '3600' },
+    })
+    const signal = await limitFromReply({
+      account: delayed.binding.account,
+      service: 'fixture-a',
+      status: response.status,
+      headers: response.headers,
+      now: 1000,
+    })
+    const mark = markFromSignal(signal, statusVaultOrder.markers.opencode2, {
+      now: 1000,
+    })
+    if (!mark) throw new Error('Expected delayed rate mark')
+    limits.mark(delayed, mark, 1000)
+    await limits.flush()
+    expect({ transport, marks: [...(await limits.marks())] }).toEqual({
+      transport,
+      marks: [],
+    })
+  }
+})
 
 test('a successful OpenCode 2 top-up probe clears an active balance mark through the registry', async () => {
   let time = 1000

@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test'
 import { readVaultRoster } from '@cortexkit/common-auth/claustrum'
+import {
+  type LimitsNamespace,
+  markFromSignal,
+  statusVaultOrder,
+} from '@cortexkit/common-auth/limits'
 import { createFetch } from '../src/fetch.js'
 import { limitFromReply, limitMarkUntil } from '../src/limits.js'
 import { fixtureEntries } from '../test-entry.ts'
@@ -8,6 +13,141 @@ import { harness, row } from './fakes.ts'
 const account = { namespace: 'fixture', accountId: 'a', incarnation: 'one' }
 const placeholder = 'owned-placeholder'
 const headers = { authorization: `Bearer ${placeholder}` }
+
+for (const host of ['opencode1', 'pi'] as const) {
+  test(`20 healthy DeepSeek requests commit no limit state on ${host}`, async () => {
+    const h = await harness([row('a')], host, () => 1000)
+    const limits = await h.limits('fixture-a')
+    const path = h.hub.rosterPath('fixture-a')
+    const before = (await readVaultRoster(path))?.limits as
+      | LimitsNamespace
+      | undefined
+    const revision = before?.revision ?? 0
+    expect(revision).toBe(0)
+    let sends = 0
+    const fetch = createFetch({
+      entry: { ...fixtureEntries[0], service: 'deepseek' },
+      placeholder,
+      consumer: h.consumer,
+      host,
+      now: () => 1000,
+      limits: async () => limits,
+      fetch: async () => {
+        sends++
+        return new Response('healthy')
+      },
+    })
+    for (let request = 0; request < 20; request++)
+      expect(
+        await (await fetch('https://fixture.invalid', { headers })).text(),
+      ).toBe('healthy')
+    await limits.flush()
+    const after = (await readVaultRoster(path))?.limits as
+      | LimitsNamespace
+      | undefined
+    expect(sends).toBe(20)
+    expect(after?.revision ?? 0).toBe(revision)
+    expect(after?.operationIds.length ?? 0).toBe(0)
+  })
+
+  test(`a recovered payment mark permits only one clear on ${host}`, async () => {
+    let time = 1000
+    const h = await harness([row('a')], host, () => time)
+    const limits = await h.limits('fixture-a')
+    const path = h.hub.rosterPath('fixture-a')
+    let sends = 0
+    const fetch = createFetch({
+      entry: { ...fixtureEntries[0], service: 'deepseek' },
+      placeholder,
+      consumer: h.consumer,
+      host,
+      now: () => time,
+      limits: async () => limits,
+      fetch: async () =>
+        new Response('provider reply', { status: ++sends === 1 ? 402 : 200 }),
+    })
+    await fetch('https://fixture.invalid', { headers })
+    await limits.flush()
+    time = 301000
+    expect((await fetch('https://fixture.invalid', { headers })).status).toBe(
+      200,
+    )
+    await limits.flush()
+    const recovered = (await readVaultRoster(path))?.limits as
+      | LimitsNamespace
+      | undefined
+    expect(recovered?.revision).toBe(2)
+    for (let request = 0; request < 20; request++)
+      expect((await fetch('https://fixture.invalid', { headers })).status).toBe(
+        200,
+      )
+    await limits.flush()
+    const after = (await readVaultRoster(path))?.limits as
+      | LimitsNamespace
+      | undefined
+    expect(after?.revision).toBe(2)
+    expect(after?.operationIds).toHaveLength(2)
+  })
+}
+
+test('a rejected stale payment clear leaves newer evidence eligible for recovery', async () => {
+  let time = 1000
+  const h = await harness([row('a')], 'opencode1', () => time)
+  const limits = await h.limits('fixture-a')
+  const route = h.consumer.routingRows()[0].id
+  let sends = 0
+  const fetch = createFetch({
+    entry: { ...fixtureEntries[0], service: 'deepseek' },
+    placeholder,
+    consumer: h.consumer,
+    now: () => time,
+    limits: async () => limits,
+    fetch: async () =>
+      new Response('provider reply', { status: ++sends === 1 ? 402 : 200 }),
+  })
+  await fetch('https://fixture.invalid', { headers })
+  await limits.flush()
+  time = 301000
+  await limits.candidates()
+  const staleProbe = limits.observe(route)
+  time = 301001
+  const newer = limits.observe(route)
+  const parse = (retry?: string) =>
+    limitFromReply({
+      account: newer.binding.account,
+      service: 'deepseek',
+      status: 402,
+      headers: new Headers(retry ? { 'retry-after': retry } : {}),
+      now: 301001,
+    })
+  const mark = markFromSignal(
+    await parse(),
+    statusVaultOrder.markers.opencode1,
+    { now: time },
+  )
+  if (!mark) throw new Error('Expected newer balance evidence')
+  limits.mark(newer, mark, time)
+  await limits.flush()
+  time = 302001
+  await limits.candidates()
+  limits.clear(staleProbe, 'payment-balance')
+  await limits.beforeDispatch(route)
+  expect((await limits.candidates())[0].blockers).toMatchObject([
+    { until: 601001 },
+  ])
+  time = 601001
+  expect((await fetch('https://fixture.invalid', { headers })).status).toBe(200)
+  await limits.beforeDispatch(route)
+  const delayed = markFromSignal(
+    await parse('7200'),
+    statusVaultOrder.markers.opencode1,
+    { now: 301001 },
+  )
+  if (!delayed) throw new Error('Expected delayed balance evidence')
+  limits.mark(newer, delayed, 301001)
+  await limits.flush()
+  expect([...(await limits.marks())]).toEqual([])
+})
 
 for (const count of [1, 2]) {
   test(`${count} balance-marked accounts refuse with the payment cause on a fresh request`, async () => {
