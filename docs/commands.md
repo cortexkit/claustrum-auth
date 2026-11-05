@@ -47,12 +47,6 @@ expires, a request can try that account again without a restart. Key spending
 caps, in-flight budgets and other unconfirmed 402s do not move the request to
 another account. Only 401 is reported to the vault.
 
-Balance and rate-limit marks are saved in the host's local vault roster and
-shared by processes using that same roster. They survive plugin reloads and
-restarts; they are not credential-failure reports to the vault. Different host
-generations or provider catalogs can have separate roster files and therefore
-separate marks.
-
 ## Activate or release a provider
 
 On OpenCode 1 and Pi:

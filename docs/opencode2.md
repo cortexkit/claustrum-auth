@@ -70,8 +70,7 @@ details and the host source they rest on.
 
 Accounts are tried in roster order. A confirmed empty-balance 402 from
 DeepSeek or OpenRouter sets the account aside for five minutes; a 429 sets it
-aside for 60 seconds. On HTTP, a finite `Retry-After` overrides either default;
-an overflowing millisecond deadline uses the default. Other
+aside for 60 seconds. On HTTP, `Retry-After` overrides either default. Other
 402s stay with the user and do not mark the account. xAI WebSocket error
 frames have no confirmed balance rule, so a 402 does not move the request to
 another account there.
@@ -79,15 +78,7 @@ another account there.
 The host's retry moves the turn only before output and only when another
 eligible account exists. When every account is marked, a fresh request tries
 the first account again instead of waiting for all marks to expire. This
-probe lets an account with new funds recover without a restart. Its successful
-balance recovery clears through the shared registry, without clearing an active
-rate-limit mark. Marks persist in the local roster and are shared by processes
-using that same roster.
-
-Only a probe for a previously observed mark publishes recovery bookkeeping;
-normal successful requests with no marks do not write limit state. Successful
-expired-rate probes also clear through the registry. A success before a rate
-mark's deadline does not clear that still-active mark.
+probe lets an account with new funds recover without a restart.
 
 A session that has used both the vault and another credential for the same
 provider keeps the host's own retry decisions

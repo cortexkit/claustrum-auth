@@ -1,5 +1,4 @@
 import {
-  type AccountLimits,
   type CoreFetch,
   createFetch,
   type ProviderEntry,
@@ -35,7 +34,6 @@ export interface ProviderFetchOptions {
   envNames: () => Promise<readonly string[]>
   env?: () => Readonly<Record<string, string | undefined>>
   rateLimitMarks?: Map<string, number>
-  limits?: () => Promise<AccountLimits>
   platform?: NodeJS.Platform
   // Asked when an owned request finds no vault account: is vault mode off,
   // does a discovery fail because the vault is unreachable, or did one just
@@ -64,7 +62,6 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
       placeholder: placeholderFor(options.provider),
       consumer: options.consumer,
       rateLimitMarks,
-      limits: options.limits,
       // The core passes a request it does not own on with the caller's own
       // arguments; every owned dispatch is a new Request it built.
       fetch: (next, nextInit) =>

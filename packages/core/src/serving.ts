@@ -3,7 +3,6 @@ import type {
   ClaustrumScopedAttempt,
 } from '@cortexkit/common-auth/claustrum'
 import { routeOrdered } from '@cortexkit/common-auth/routing'
-import type { AccountLimits } from './limits.js'
 import {
   ClaustrumAuthError,
   checkPlacement,
@@ -23,7 +22,6 @@ export interface ServingOptions {
   consumer: ServingConsumer
   now?: () => number
   rateLimitMarks?: Map<string, number>
-  limits?: () => Promise<AccountLimits | undefined>
 }
 
 // Pass these provider rows to routing as api-key without quota data, even when
@@ -66,14 +64,10 @@ export function servingCallbacks(options: ServingOptions) {
         return undefined
       const route = orderedRoutes(options)[0]
       if (!route) throw new ClaustrumAuthError('no-vault-account')
-      const limits = await options.limits?.()
-      if (limits && !(await limits.beforeDispatch(route)))
-        throw new ClaustrumAuthError('no-vault-account')
-      const observation = limits?.observe(route)
       const receipt = await options.consumer.authorize(route, signal)
       try {
         const draft = placeReceipt(url, headers, options.entry, receipt)
-        return { ...draft, receipt, route, limits, observation }
+        return { ...draft, receipt, route }
       } catch (error) {
         throw redactError(error, [receipt.accessToken])
       }

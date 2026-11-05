@@ -759,10 +759,7 @@ test('an all-marked balance account recovers on a fresh request after expiry', a
   ).toBe(402)
   time = 2000
   const limited = await fetch('https://fixture.invalid', { headers: bearer })
-  expect(limited.status).toBe(402)
-  expect(await limited.json()).toEqual({
-    error: 'claustrum-auth: insufficient balance',
-  })
+  expect(limited.status).toBe(429)
   expect(limited.headers.get('retry-after')).toBe('299')
   expect(sends).toBe(1)
   time = 301001

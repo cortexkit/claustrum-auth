@@ -8,23 +8,9 @@ export {
   SlotQueue,
   transitionActivation,
 } from './activation.js'
-export { hasBalanceRule, isBalanceFailure } from './balance.js'
+export { balanceProbeMs, isBalanceFailure } from './balance.js'
 export type { CoreFetch, FetchOptions } from './fetch.js'
 export { createFetch, maxBodyBytes } from './fetch.js'
-export type {
-  AccountLimits,
-  CoreLimits,
-  LimitObservation,
-  ReplyFacts,
-} from './limits.js'
-export {
-  isLocalLimitRefusal,
-  limitFromReply,
-  limitMarkUntil,
-  limitRefusal,
-  localLimitRefusal,
-  localLimitRetry,
-} from './limits.js'
 export type { MenuConsumer, MenuHub, VaultMenuOptions } from './menu.js'
 export { menuUsage, vaultMenuText } from './menu.js'
 export { command, opencodeEnrollment, piEnrollment, pluginId } from './names.js'

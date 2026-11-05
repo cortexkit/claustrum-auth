@@ -119,21 +119,14 @@ balance and spending limits; a new key is not necessarily required.
 On OpenCode 1 and Pi, a balance mark lasts five minutes by default. After
 expiry, the next request can try the account again. Success clears the expired
 mark; another balance 402 renews it. No restart is required after a top-up.
-A finite `Retry-After` overrides the default and can delay this retry. A numeric
-value that overflows the millisecond deadline uses the default instead.
+A valid `Retry-After` overrides the default and can delay this retry.
 Concurrent requests can each try an account whose mark has just expired.
-Marks and their balance/rate causes survive restarts in the host's local vault
-roster. A successful recovery publishes a clear so delayed older evidence cannot
-restore that mark; a request to the same account joins that clear before sending.
 
 If every attempted account has a confirmed balance 402, the last provider
 response is returned with credentials removed. If no account is left and the
 attempts included both a balance 402 and a 429, the plugin returns
-`accounts-rate-limited` with status 429. On OpenCode 1 and Pi, when every eligible
-account has an active balance mark, a fresh request instead returns status 402
-with `claustrum-auth: insufficient balance` without a provider send. Mixed rate
-and balance marks, or old marks with no recorded cause, still return the 429.
-OpenCode 2
+`accounts-rate-limited` with status 429. While all accounts have active marks,
+a new request returns that same 429 without a provider send. OpenCode 2
 instead probes the first account on an all-marked fresh request; see
 [several accounts](opencode2.md#several-accounts).
 

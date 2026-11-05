@@ -1,3 +1,6 @@
+// Retry after five minutes to detect a top-up without an hourly exclusion.
+export const balanceProbeMs = 5 * 60 * 1000
+
 // DeepSeek documents no body field and gives 402 only one meaning:
 // "Insufficient Balance" ("You have run out of balance").
 // https://api-docs.deepseek.com/quick_start/error_codes
@@ -5,10 +8,6 @@
 // for account credits, but reason = "weight_exceeds_budget" is a request
 // size limit, not an empty balance. Key and in-flight caps must not reroute.
 // https://openrouter.ai/docs/api-reference/limits#handling-402-errors
-export function hasBalanceRule(service: string | undefined) {
-  return service === 'deepseek' || service === 'openrouter'
-}
-
 export function isBalanceFailure(service: string | undefined, body?: string) {
   if (service === 'deepseek') return true
   if (service !== 'openrouter') return false
