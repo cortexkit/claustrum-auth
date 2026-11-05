@@ -264,8 +264,29 @@ export async function createAccountLimits(options: {
     }
   }
   const target = { scope: { kind: 'pool' as const }, window: 'retry' }
+  const rosterBindings = () =>
+    JSON.stringify(
+      options.consumer
+        .snapshot()
+        ?.rows.map((row) => [row.routeId, row.addedAt, row.accountIdentity]) ??
+        [],
+    )
+  let loadedBindings: string | undefined
+  const reloadForRoster = async () => {
+    let current = rosterBindings()
+    if (current === loadedBindings && now() - registry.lastReloadAt < 1000)
+      return
+    // Discovery can publish accounts after registry hydration, inside its
+    // fresh interval. Reload their persisted bindings before admitting them;
+    // limit-only roster writes do not change this binding projection.
+    do {
+      await registry.reload()
+      loadedBindings = current
+      current = rosterBindings()
+    } while (current !== loadedBindings)
+  }
   const candidates = async (): Promise<LimitCandidate[]> => {
-    if (now() - registry.lastReloadAt >= 1000) await registry.reload()
+    await reloadForRoster()
     const snapshot = snapshotWithProbeEvidence()
     return options.consumer.routingRows().map((row) => {
       const current = binding(row.id)
@@ -309,6 +330,7 @@ export async function createAccountLimits(options: {
       )
     },
     async beforeDispatch(route) {
+      await reloadForRoster()
       return !(await registry.beforeDispatch(binding(route))).blocked
     },
     observe(route) {

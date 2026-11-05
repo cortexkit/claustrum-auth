@@ -14,6 +14,40 @@ const account = { namespace: 'fixture', accountId: 'a', incarnation: 'one' }
 const placeholder = 'owned-placeholder'
 const headers = { authorization: `Bearer ${placeholder}` }
 
+test('fresh-process roster publication races limit-registry hydration without losing an account', async () => {
+  const inventory: ReturnType<typeof row>[] = []
+  const h = await harness(inventory, 'opencode1', () => 1000)
+  const limits = await h.limits('fixture-a')
+  expect(await limits.candidates()).toEqual([])
+  // Discovery commits after the limits registry hydrated its empty roster,
+  // but before its one-second reload interval has elapsed.
+  inventory.push(row('a'))
+  await h.hub.refresh()
+  expect(h.consumer.routingRows()).toHaveLength(1)
+  let sends = 0
+  const fetch = createFetch({
+    entry: fixtureEntries[0],
+    placeholder,
+    consumer: h.consumer,
+    now: () => 1000,
+    limits: async () => limits,
+    fetch: async () => {
+      sends++
+      return new Response('provider reached')
+    },
+  })
+  expect(
+    await (await fetch('https://fixture.invalid', { headers })).text(),
+  ).toBe('provider reached')
+  expect(h.reads).toEqual(['a'])
+  expect(sends).toBe(1)
+  await limits.flush()
+  const state = (await readVaultRoster(h.hub.rosterPath('fixture-a')))
+    ?.limits as LimitsNamespace | undefined
+  expect(state?.revision ?? 0).toBe(0)
+  expect(state?.operationIds.length ?? 0).toBe(0)
+})
+
 for (const host of ['opencode1', 'pi'] as const) {
   test(`20 healthy DeepSeek requests commit no limit state on ${host}`, async () => {
     const h = await harness([row('a')], host, () => 1000)
