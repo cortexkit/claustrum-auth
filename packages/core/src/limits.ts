@@ -20,6 +20,7 @@ import {
 } from '@cortexkit/common-auth/limits'
 import { createVaultLimitsAdapter } from '@cortexkit/common-auth/limits/vault'
 import { isBalanceFailure } from './balance.js'
+import { ClaustrumAuthError } from './placement.js'
 
 export interface ReplyFacts {
   account: IdentityBinding['account']
@@ -163,7 +164,7 @@ export async function createAccountLimits(options: {
     const row = options.consumer
       .snapshot()
       ?.rows.find((row) => row.routeId === route)
-    if (!row) throw new Error('claustrum-auth: missing limit account binding')
+    if (!row) throw new ClaustrumAuthError('route-gone')
     return {
       account: {
         namespace,

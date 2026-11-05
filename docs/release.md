@@ -7,11 +7,6 @@ bundled into the public packages, not published or installed by consumers.
 
 ## Unreleased: shared account-limit policy
 
-This adoption is not ready to merge with common-auth 0.35.0: a successful
-balance probe can fence out an already-dispatched rate-limit observation of a
-different cause. The regression remains enabled while the shared library gains
-cause-aware recovery tombstones; the plugin does not rewrite in-flight evidence.
-
 - Rate-limit and confirmed balance marks now use common-auth's shared registry
   and the existing roster's `limits` field. Processes using the same provider
   roster agree on marks, including after a restart. Different roster paths
@@ -19,13 +14,16 @@ cause-aware recovery tombstones; the plugin does not rewrite in-flight evidence.
 - Successful post-expiry probes clear marks through registry commands that
   prevent a delayed pre-clear mark from restoring a cleared deadline, even when
   a process starts after the old timer expired. Clears preserve newer evidence
-  and already-active marks with a different cause.
+  and marks with a different cause, including a still-pending rate-limit reply
+  after a balance recovery. Older clears without a recorded cause continue to
+  fence all causes.
 - OpenCode 2 now wires `responseRetry` to veto replay of a local refusal, using
   in-memory response identity rather than matching provider error text. Existing
   provider responses are unchanged. A fresh OpenCode 2 request still probes the
   first account when every account has an active timed mark.
 
-- All three hosts now use common-auth 0.35.0's `statusVaultOrder` decision policy.
+- All three hosts now use common-auth 0.37.0's `statusVaultOrder` policy to decide
+  account failover and local limit refusals.
   Provider-specific DeepSeek and OpenRouter balance detection remains in the
   plugin; key caps and unconfirmed 402s still pass through unchanged.
 - On OpenCode 1 and Pi, a fresh request whose eligible accounts are all marked
