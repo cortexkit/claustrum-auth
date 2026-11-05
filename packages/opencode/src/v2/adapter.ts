@@ -605,14 +605,21 @@ export function createVaultAdapter(
       if (
         data?.limits &&
         data.observation &&
-        hasBalanceRule(options.entry.service) &&
         !parsed &&
         ((outcome.status !== undefined &&
           outcome.status >= 200 &&
           outcome.status < 300) ||
-          outcome.status === 402)
-      )
-        data.limits.clear(data.observation, 'payment-balance')
+          outcome.status === 402 ||
+          (attempt.transport === 'ws' && outcome.error === undefined))
+      ) {
+        if (
+          hasBalanceRule(options.entry.service) &&
+          data.observation.paymentProbe
+        )
+          data.limits.clear(data.observation, 'payment-balance')
+        if (data.observation.rateProbe)
+          data.limits.clear(data.observation, 'rate-limit')
+      }
       // Only the receipt this attempt was served can be reported, never a
       // row of another provider or plugin. Custody drops a kept receipt's
       // 401 without reporting it, since the vault is unreachable then. On a

@@ -84,6 +84,11 @@ balance recovery clears through the shared registry, without clearing an active
 rate-limit mark. Marks persist in the local roster and are shared by processes
 using that same roster.
 
+Only a probe for a previously observed mark publishes recovery bookkeeping;
+normal successful requests with no marks do not write limit state. Successful
+expired-rate probes also clear through the registry. A success before a rate
+mark's deadline does not clear that still-active mark.
+
 A session that has used both the vault and another credential for the same
 provider keeps the host's own retry decisions
 for the rest of its life (common-auth's mixed-ownership rule). A 401 is

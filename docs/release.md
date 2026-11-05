@@ -17,6 +17,10 @@ bundled into the public packages, not published or installed by consumers.
   and marks with a different cause, including a still-pending rate-limit reply
   after a balance recovery. Older clears without a recorded cause continue to
   fence all causes.
+- Requests with no observed limit mark do not commit recovery bookkeeping.
+  A successful payment recovery consumes its evidence once, rather than writing
+  another clear for each later successful request. OpenCode 2 also clears after
+  successful expired-rate probes, while preserving still-active rate marks.
 - OpenCode 2 now wires `responseRetry` to veto replay of a local refusal, using
   in-memory response identity rather than matching provider error text. Existing
   provider responses are unchanged. A fresh OpenCode 2 request still probes the

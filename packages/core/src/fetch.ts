@@ -302,7 +302,10 @@ export function createFetch(options: FetchOptions): CoreFetch {
         const balance402 = parsed?.kind === 'payment-balance'
         if (response.ok || (response.status === 402 && !balance402)) {
           if (limits && observation) {
-            if (hasBalanceRule(options.entry.service))
+            if (
+              hasBalanceRule(options.entry.service) &&
+              observation.paymentProbe
+            )
               limits.clear(observation, 'payment-balance')
             if (observation.rateProbe) limits.clear(observation, 'rate-limit')
           } else if (
