@@ -575,29 +575,29 @@ test('the catalog a test host is given holds both the live and the fixture provi
   ])
 })
 
-test('a shipped provider serves its vault row only to its documented origin', async () => {
-  const rows = (host: Host) =>
-    vaultRows.flatMap((item) =>
-      item.expected(host).kind === 'mine'
-        ? [
-            row(item.credential, {
-              providerIds: item.providerIds,
-              credentialType: item.credentialType ?? 'apikey',
-              authMethod: item.credentialType === 'oauth' ? 'oauth' : 'apikey',
-              ...(item.credentialType === 'oauth'
-                ? { refreshAdapter: item.providerIds[0] }
-                : {}),
-              categories: [...(item.categories ?? ['llm-provider'])],
-              accountId: `account-${item.credential}`,
-            }),
-          ]
-        : [],
-    )
-  for (const host of hosts) {
-    const h = await liveHarness(rows(host), host)
-    for (const item of vaultRows) {
-      const outcome = item.expected(host)
-      if (outcome.kind !== 'mine') continue
+for (const host of hosts) {
+  for (const item of vaultRows) {
+    const outcome = item.expected(host)
+    if (outcome.kind !== 'mine') continue
+    test(`a shipped provider serves its vault row only to its documented origin (${host}: ${outcome.member})`, async () => {
+      const rows = vaultRows.flatMap((item) =>
+        item.expected(host).kind === 'mine'
+          ? [
+              row(item.credential, {
+                providerIds: item.providerIds,
+                credentialType: item.credentialType ?? 'apikey',
+                authMethod:
+                  item.credentialType === 'oauth' ? 'oauth' : 'apikey',
+                ...(item.credentialType === 'oauth'
+                  ? { refreshAdapter: item.providerIds[0] }
+                  : {}),
+                categories: [...(item.categories ?? ['llm-provider'])],
+                accountId: `account-${item.credential}`,
+              }),
+            ]
+          : [],
+      )
+      const h = await liveHarness(rows, host)
       const entry = supportedProviders.find(
         (candidate) => candidate.hosts[host] === outcome.member,
       )
@@ -640,9 +640,9 @@ test('a shipped provider serves its vault row only to its documented origin', as
       }
       expect(h.reads).toHaveLength(reads)
       expect(reached).toBe(`Bearer ${h.secretOf(item.credential)}`)
-    }
+    })
   }
-})
+}
 
 test('a shipped provider refuses a misplaced placeholder with no vault read', async () => {
   const h = await liveHarness(

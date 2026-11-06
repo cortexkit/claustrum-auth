@@ -596,27 +596,26 @@ vector(
     expect(await w.blockers(1)).toEqual([])
   },
 )
-vector(
-  52,
-  'balance hints and overflowing milliseconds use finite defaults',
-  async (host) => {
-    for (const [hint, until] of [
-      [undefined, 301000],
-      ['invalid', 301000],
-      ['7200', 7201000],
-      ['17', 18000],
-      ['Thu, 01 Jan 1970 00:00:11 GMT', 11000],
-      ['0', undefined],
-      ['1e308', 301000],
-    ] as const) {
+for (const [hint, until] of [
+  [undefined, 301000],
+  ['invalid', 301000],
+  ['7200', 7201000],
+  ['17', 18000],
+  ['Thu, 01 Jan 1970 00:00:11 GMT', 11000],
+  ['0', undefined],
+  ['1e308', 301000],
+] as const)
+  vector(
+    52,
+    `balance hints and overflowing milliseconds use finite defaults: ${hint ?? 'absent'}`,
+    async (host) => {
       const w = await world(host, 'deepseek')
       await markReply(w, 402, hint)
       expect((await w.blockers())[0]?.until).toBe(until)
       if (until !== undefined)
         expect((await w.blockers())[0]?.cause).toBe('payment-balance')
-    }
-  },
-)
+    },
+  )
 vector(
   53,
   'a sole balance-marked account names payment without a provider send',
