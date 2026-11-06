@@ -6,6 +6,7 @@ import { createFetch } from '../src/fetch.js'
 import { createAccountLimits, limitFromReply } from '../src/limits.js'
 import { fixtureEntries } from '../test-entry.ts'
 import { harness, row } from './fakes.ts'
+import { testTiming, withTestTiming } from './phase-timing.ts'
 
 // Transport-level adoption vectors: the parser sees HTTP replies, never a
 // fixture-built signal. The complementary file exercises the OC2 coordinator.
@@ -21,10 +22,11 @@ function vector(
   name: string,
   check: (host: Host) => Promise<void>,
 ) {
-  test(`CL-${id} ${name}`, async () => {
-    for (const host of ['opencode1', 'pi'] as const) await check(host)
-    covered.add(id)
-  })
+  test(`CL-${id} ${name}`, () =>
+    withTestTiming(`core CL-${id} ${name}`, async () => {
+      for (const host of ['opencode1', 'pi'] as const) await check(host)
+      covered.add(id)
+    }))
 }
 afterAll(() => expect([...covered].sort((a, b) => a - b)).toEqual(ids))
 
@@ -60,7 +62,10 @@ async function world(
     host,
     now: () => time,
     limits: () => h.limits('fixture-a'),
-    fetch: async (request) => transport(request as Request),
+    fetch: async (request) =>
+      testTiming().phase('provider round trip', () =>
+        transport(request as Request),
+      ),
   })
   return {
     h,

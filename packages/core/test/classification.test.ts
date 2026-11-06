@@ -16,6 +16,7 @@ import {
   vaultMenuText,
 } from '../test-entry.ts'
 import { bearer, harness, liveHarness, placeholder, row } from './fakes.ts'
+import { withTestTiming } from './phase-timing.ts'
 import { realVaultRows } from './vault-rows.ts'
 
 const hosts: Host[] = ['opencode1', 'opencode2', 'pi']
@@ -325,63 +326,70 @@ test('shared vault fixtures retain the real metadata spelling and refresher pres
   })
 })
 
-test('real vault metadata serves API keys on every host and refuses missing authMethod', async () => {
-  for (const host of hosts) {
-    const h = await liveHarness(realVaultRows, host)
-    const expected = [
-      ['cerebras', 'apikey:cerebras'],
-      ['opencode-go', 'apikey:opencode-go'],
-      ['meta', 'oauth:meta'],
-      ...(host === 'pi' ? [] : [['cline-pass', 'apikey:cline-pass']]),
-      ...(host === 'opencode2' ? [] : [['opencode', 'apikey:opencode-zen']]),
-    ]
-    for (const [provider, credentialId] of expected) {
-      const consumer = h.consumers.get(provider as string)
-      expect(consumer?.routingRows().map((row) => row.id)).toEqual([
-        `vault:${credentialId}`,
-      ])
-      const entry = supportedProviders.find(
-        (entry) => entry.hosts[host] === provider,
-      )
-      if (!consumer || !entry) throw new Error(`missing ${provider} on ${host}`)
-      let authorization = ''
-      const fetch = createFetch({
-        consumer,
-        entry,
-        placeholder,
-        fetch: async (request) => {
-          authorization =
-            (request as Request).headers.get('authorization') ?? ''
-          return new Response('ok')
-        },
-      })
-      await fetch(`${entry.origins[0]}/v1/chat/completions`, {
-        headers: bearer,
-      })
-      expect(authorization).toBe(`Bearer secret-${credentialId}-1`)
-    }
-    expect(h.hub.refusals()).toMatchObject({
-      notMine: 0,
-      refused: expect.arrayContaining([
-        {
-          credentialId: 'apikey:missing-auth-method',
-          code: 'unknown-auth-method',
-        },
-      ]),
-    })
-    const refusals = await vaultMenuText(
-      {
-        authority: async () => 'vault',
-        hub: h.hub,
-        consumers: h.consumers,
-        providerStatus: () => 'available',
-      },
-      'refusals',
-    )
-    expect(refusals).toContain('Rows left to other plugins: 0')
-    expect(refusals).toContain(
-      'apikey:missing-auth-method: unknown-auth-method',
-    )
-    expect(h.reads).not.toContain('apikey:missing-auth-method')
-  }
-})
+test('real vault metadata serves API keys on every host and refuses missing authMethod', () =>
+  withTestTiming(
+    'real vault metadata serves API keys on every host and refuses missing authMethod',
+    async () => {
+      for (const host of hosts) {
+        const h = await liveHarness(realVaultRows, host)
+        const expected = [
+          ['cerebras', 'apikey:cerebras'],
+          ['opencode-go', 'apikey:opencode-go'],
+          ['meta', 'oauth:meta'],
+          ...(host === 'pi' ? [] : [['cline-pass', 'apikey:cline-pass']]),
+          ...(host === 'opencode2'
+            ? []
+            : [['opencode', 'apikey:opencode-zen']]),
+        ]
+        for (const [provider, credentialId] of expected) {
+          const consumer = h.consumers.get(provider as string)
+          expect(consumer?.routingRows().map((row) => row.id)).toEqual([
+            `vault:${credentialId}`,
+          ])
+          const entry = supportedProviders.find(
+            (entry) => entry.hosts[host] === provider,
+          )
+          if (!consumer || !entry)
+            throw new Error(`missing ${provider} on ${host}`)
+          let authorization = ''
+          const fetch = createFetch({
+            consumer,
+            entry,
+            placeholder,
+            fetch: async (request) => {
+              authorization =
+                (request as Request).headers.get('authorization') ?? ''
+              return new Response('ok')
+            },
+          })
+          await fetch(`${entry.origins[0]}/v1/chat/completions`, {
+            headers: bearer,
+          })
+          expect(authorization).toBe(`Bearer secret-${credentialId}-1`)
+        }
+        expect(h.hub.refusals()).toMatchObject({
+          notMine: 0,
+          refused: expect.arrayContaining([
+            {
+              credentialId: 'apikey:missing-auth-method',
+              code: 'unknown-auth-method',
+            },
+          ]),
+        })
+        const refusals = await vaultMenuText(
+          {
+            authority: async () => 'vault',
+            hub: h.hub,
+            consumers: h.consumers,
+            providerStatus: () => 'available',
+          },
+          'refusals',
+        )
+        expect(refusals).toContain('Rows left to other plugins: 0')
+        expect(refusals).toContain(
+          'apikey:missing-auth-method: unknown-auth-method',
+        )
+        expect(h.reads).not.toContain('apikey:missing-auth-method')
+      }
+    },
+  ))

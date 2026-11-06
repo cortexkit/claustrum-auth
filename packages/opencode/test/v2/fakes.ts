@@ -8,6 +8,7 @@ import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { deferTestTiming, testTiming } from '../../../core/test/phase-timing.ts'
 import { apiKeyRow } from '../../../core/test/vault-rows.ts'
 import {
   createTestCore,
@@ -33,12 +34,14 @@ let armed = false
  */
 function afterThisTest(close: () => Promise<unknown>) {
   if (!armed) {
+    const finishTiming = deferTestTiming()
     onTestFinished(async () => {
       armed = false
       for (const close of cleanup.splice(0).reverse()) await close()
       const left = [...liveDirs]
       if (left.length)
         throw new Error(`scratch folder left behind (${left.join(', ')})`)
+      finishTiming()
     })
     armed = true
     // A scratch folder still present when a test starts outlived the test
@@ -252,7 +255,9 @@ export async function trigger<T extends object>(
 ): Promise<T> {
   for (const hook of host.hooks.get(name) ?? []) {
     if (hook.providerID && hook.providerID !== draft.model.providerID) continue
-    await (hook.callback as (draft: T) => unknown)(draft)
+    await testTiming().phase(`host/provider ${name}`, () =>
+      (hook.callback as (draft: T) => unknown)(draft),
+    )
   }
   return draft
 }
@@ -298,17 +303,19 @@ export async function startServer(
   const tokenPath = path.join(dir, 'token.json')
   const writeStarted = performance.now()
   let renameAttempts: number | undefined
-  await writeJsonAtomic(
-    tokenPath,
-    {
-      token: '01'.repeat(32),
-      token_generation: 1,
-    },
-    {
-      onOutcome: (outcome) => {
-        renameAttempts = outcome.attempts
+  await testTiming().phase('token private write', () =>
+    writeJsonAtomic(
+      tokenPath,
+      {
+        token: '01'.repeat(32),
+        token_generation: 1,
       },
-    },
+      {
+        onOutcome: (outcome) => {
+          renameAttempts = outcome.attempts
+        },
+      },
+    ),
   )
   options.clock?.mark(
     `token write ${Math.round(performance.now() - writeStarted)}ms` +

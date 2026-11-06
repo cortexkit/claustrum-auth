@@ -12,6 +12,7 @@ import {
   type ProviderEntry,
   supportedProviders,
 } from '../test-entry.ts'
+import { deferTestTiming, testTiming } from './phase-timing.ts'
 import { apiKeyRow } from './vault-rows.ts'
 
 const cleanup: (() => Promise<unknown>)[] = []
@@ -30,12 +31,14 @@ let armed = false
  */
 function afterThisTest(close: () => Promise<unknown>) {
   if (!armed) {
+    const finishTiming = deferTestTiming()
     onTestFinished(async () => {
       armed = false
       for (const close of cleanup.splice(0).reverse()) await close()
       const left = [...liveDirs]
       if (left.length)
         throw new Error(`scratch folder left behind (${left.join(', ')})`)
+      finishTiming()
     })
     armed = true
     // A scratch folder still present when a test starts outlived the test
@@ -110,10 +113,12 @@ async function withTable(
   afterThisTest(() => removeScratch(dir))
   liveDirs.add(dir)
   const tokenPath = path.join(dir, 'token.json')
-  await writeJsonAtomic(tokenPath, {
-    token: '01'.repeat(32),
-    token_generation: 1,
-  })
+  await testTiming().phase('token private write', () =>
+    writeJsonAtomic(tokenPath, {
+      token: '01'.repeat(32),
+      token_generation: 1,
+    }),
+  )
   const reads: string[] = []
   const reports: Parameters<
     ClaustrumScopedClient['reportAuthFailureScoped']

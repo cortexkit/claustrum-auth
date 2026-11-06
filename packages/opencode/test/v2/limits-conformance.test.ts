@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from 'bun:test'
 import { readVaultRoster } from '@cortexkit/common-auth/claustrum'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
+import { withTestTiming } from '../../../core/test/phase-timing.ts'
 import { type ServerDeps, vaultMethodId } from '../../src/v2/setup.ts'
 import { origin, row, scope, startServer, table, trigger } from './fakes.ts'
 
@@ -12,10 +13,11 @@ const ids = [
   67, 68, 69,
 ]
 function vector(id: number, name: string, check: () => Promise<void>) {
-  test(`CL-${id} ${name}`, async () => {
-    await check()
-    covered.add(id)
-  })
+  test(`CL-${id} ${name}`, () =>
+    withTestTiming(`opencode2 CL-${id} ${name}`, async () => {
+      await check()
+      covered.add(id)
+    }))
 }
 afterAll(() => expect([...covered].sort((a, b) => a - b)).toEqual(ids))
 const provider = 'fixture-a'

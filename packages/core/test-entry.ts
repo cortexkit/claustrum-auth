@@ -5,6 +5,7 @@ import type { Host, HostFacts, ProviderEntry } from './src/providers.ts'
 import { supportedProviders } from './src/providers.ts'
 import type { CoreOptions } from './src/runtime.ts'
 import { createCoreWithTable } from './src/runtime.ts'
+import { hasTestTiming, testTiming } from './test/phase-timing.ts'
 
 export const fixtureEntries: readonly ProviderEntry[] = [
   {
@@ -55,7 +56,67 @@ export const catalogEntries: readonly ProviderEntry[] = [
 ]
 
 export function createTestCore(options: CoreOptions, table = fixtureEntries) {
-  return createCoreWithTable(options, table)
+  if (!hasTestTiming()) return createCoreWithTable(options, table)
+  const timing = testTiming()
+  const connect = options.connect
+  const core = createCoreWithTable(
+    {
+      ...options,
+      connect:
+        connect &&
+        (async (...args) => {
+          const client = await timing.phase('vault connect', () =>
+            connect(...args),
+          )
+          return {
+            ...client,
+            listScoped: (...args) =>
+              timing.phase('vault list', () => client.listScoped(...args)),
+            getScoped: (...args) =>
+              timing.phase('vault get', () => client.getScoped(...args)),
+            reportAuthFailureScoped: (...args) =>
+              timing.phase('vault report', () =>
+                client.reportAuthFailureScoped(...args),
+              ),
+          }
+        }),
+    },
+    table,
+  )
+  const refresh = core.hub.refresh.bind(core.hub)
+  core.hub.refresh = (...args) =>
+    timing.phase('roster refresh (private writes + locks)', () =>
+      refresh(...args),
+    )
+  const dispose = core.hub.dispose.bind(core.hub)
+  core.hub.dispose = () => timing.phase('hub dispose', dispose)
+  const limits = core.limits
+  const seen = new WeakSet<object>()
+  core.limits = (provider) =>
+    timing.phase('registry acquire + hydrate', async () => {
+      const registry = await limits(provider)
+      if (!seen.has(registry)) {
+        seen.add(registry)
+        const candidates = registry.candidates.bind(registry)
+        registry.candidates = () =>
+          timing.phase('registry candidates (roster/lock I/O)', candidates)
+        const beforeDispatch = registry.beforeDispatch.bind(registry)
+        registry.beforeDispatch = (...args) =>
+          timing.phase('registry dispatch reload', () =>
+            beforeDispatch(...args),
+          )
+        const flush = registry.flush.bind(registry)
+        registry.flush = () =>
+          timing.phase('registry flush (roster/lock writes)', flush)
+        const dispose = registry.dispose.bind(registry)
+        registry.dispose = () => timing.phase('registry dispose', dispose)
+      }
+      return registry
+    })
+  const disposeLimits = core.disposeLimits
+  core.disposeLimits = () =>
+    timing.phase('registry flush + dispose', disposeLimits)
+  return core
 }
 
 // A real host's catalog carries the live providers and the fixture providers
