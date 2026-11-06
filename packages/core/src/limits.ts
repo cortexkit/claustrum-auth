@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
 import type { ClaustrumConsumer } from '@cortexkit/common-auth/claustrum'
 import {
   acquireLimitsRegistry,
   buildRefusal,
+  canonicalLimitsPath,
   clearLimitsAfterProbe,
   type HostRetry,
   type IdentityBinding,
@@ -13,6 +13,8 @@ import {
   type LimitMark,
   type LimitMarkCause,
   type LimitSignal,
+  LimitsEnvelopeConflictError,
+  LimitsEnvelopeUnsupportedError,
   type LimitsNamespace,
   type LimitsRegistry,
   markFromSignal,
@@ -125,65 +127,113 @@ export interface CoreLimits {
   disposeLimits?(): Promise<void>
 }
 
-export async function createAccountLimits(options: {
-  provider: string
-  path: string
-  consumer: Pick<ClaustrumConsumer, 'snapshot' | 'routingRows'>
-  now?: () => number
-  onError?: (error: unknown) => void
-}): Promise<AccountLimits> {
+// Share terminal state across core recreation and separately bundled host entries.
+// Disabled stores carry no replacement limit marks.
+const disabledKey = Symbol.for('claustrum-auth:disabled-limits')
+const disabled = (Reflect.get(globalThis, disabledKey) ?? {
+  stores: new Set<string>(),
+  loggedDroppedReply: false,
+}) as { stores: Set<string>; loggedDroppedReply: boolean }
+Reflect.set(globalThis, disabledKey, disabled)
+const isEnvelopeError = (error: unknown) =>
+  error instanceof LimitsEnvelopeConflictError ||
+  error instanceof LimitsEnvelopeUnsupportedError
+
+export async function createAccountLimits(
+  options: {
+    provider: string
+    path: string
+    consumer: Pick<ClaustrumConsumer, 'snapshot' | 'routingRows'>
+    now?: () => number
+    onError?: (error: unknown) => void
+  },
+  acquire = acquireLimitsRegistry,
+  warn: (message: string) => void = console.warn,
+): Promise<AccountLimits> {
   const now = options.now ?? Date.now
   const namespace = JSON.stringify([
     'claustrum-auth',
     options.provider,
-    resolve(options.path),
+    // Canonical paths merge aliases. Old resolved-path marks are replaced on
+    // the next save; each account may need at most one extra provider response
+    // to relearn its rate-limit or balance mark.
+    canonicalLimitsPath(options.path),
   ])
-  const adapter = await createVaultLimitsAdapter({
-    namespace,
-    path: options.path,
-    now,
-  })
   const producerId = randomUUID()
+  let adapter: Awaited<ReturnType<typeof createVaultLimitsAdapter>> | undefined
   let hydrated: LimitsNamespace | undefined
-  const registry: LimitsRegistry = await acquireLimitsRegistry({
-    adapter: {
-      ...adapter,
-      async read(previous) {
-        const view = await adapter.read(previous)
-        if (view.authoritative) hydrated = view.snapshot
-        return view
-      },
-    },
-    isAccessRestrictive: () => false,
-    onRejected(command) {
-      if (command.producerId === producerId && command.type === 'clear') {
-        // A rejected clear did not consume recovery evidence. Let the next
-        // accepted view re-arm its probe instead of suppressing recovery.
-        seenEvidence.delete(probeKey(command.binding.account))
-        consumedHydration = undefined
-      }
-    },
-    clock: {
-      now,
-      setTimeout(callback, delay) {
-        const timer = setTimeout(callback, delay)
-        timer.unref?.()
-        return timer
-      },
-      clearTimeout(timer) {
-        clearTimeout(timer as ReturnType<typeof setTimeout>)
-      },
-    },
-  })
+  let registry: LimitsRegistry | undefined
+  let released: Promise<void> | undefined
+  const abandon = () => {
+    const previous = registry
+    registry = undefined
+    if (previous) released = previous.dispose().catch(() => {})
+    if (!disabled.stores.has(namespace)) {
+      disabled.stores.add(namespace)
+      warn('claustrum-auth: limits tracking disabled')
+    }
+  }
+  if (!disabled.stores.has(namespace))
+    try {
+      adapter = await createVaultLimitsAdapter({
+        namespace,
+        path: options.path,
+        now,
+      })
+      const persistence = adapter
+      registry = await acquire({
+        adapter: {
+          ...persistence,
+          async read(previous) {
+            const view = await persistence.read(previous)
+            if (view.authoritative) hydrated = view.snapshot
+            return view
+          },
+        },
+        isAccessRestrictive: () => false,
+        onAbandon: abandon,
+        onRejected(command) {
+          if (command.producerId === producerId && command.type === 'clear') {
+            // A rejected clear did not consume recovery evidence. Let the next
+            // accepted view re-arm its probe instead of suppressing recovery.
+            seenEvidence.delete(probeKey(command.binding.account))
+            consumedHydration = undefined
+          }
+        },
+        clock: {
+          now,
+          setTimeout(callback, delay) {
+            const timer = setTimeout(callback, delay)
+            timer.unref?.()
+            return timer
+          },
+          clearTimeout(timer) {
+            clearTimeout(timer as ReturnType<typeof setTimeout>)
+          },
+        },
+      })
+      if (registry.abandoned || disabled.stores.has(namespace)) abandon()
+    } catch (error) {
+      if (!isEnvelopeError(error) && !disabled.stores.has(namespace))
+        throw error
+      abandon()
+    }
   // An existing owner can supply the registry without using this adapter.
   // Read its initial recovery evidence once, never once per provider request.
-  if (!hydrated) {
+  if (registry && adapter && !hydrated) {
     try {
       const view = await adapter.read()
       if (view.authoritative) hydrated = view.snapshot
     } catch (error) {
-      await registry.dispose().catch(() => {})
-      throw error
+      if (isEnvelopeError(error)) {
+        // Let the registry see the terminal error before releasing its owner,
+        // so disposal cannot flush an incompatible envelope.
+        await registry?.reload()
+        abandon()
+      } else {
+        await registry?.dispose().catch(() => {})
+        throw error
+      }
     }
   }
   // Recovery evidence survives expiry pruning, but never controls eligibility.
@@ -227,7 +277,8 @@ export async function createAccountLimits(options: {
     }
   }
   const snapshotWithProbeEvidence = () => {
-    const snapshot = registry.snapshot
+    const snapshot = registry?.snapshot
+    if (!snapshot) return undefined
     // The adapter's authoritative load retains expired entries; the registry's
     // public view prunes them. Only consume a load the registry accepted, not a
     // stale read that completed after a newer commit.
@@ -273,6 +324,7 @@ export async function createAccountLimits(options: {
     )
   let loadedBindings: string | undefined
   const reloadForRoster = async () => {
+    if (!registry) return
     let current = rosterBindings()
     if (current === loadedBindings && now() - registry.lastReloadAt < 1000)
       return
@@ -281,6 +333,7 @@ export async function createAccountLimits(options: {
     // limit-only roster writes do not change this binding projection.
     do {
       await registry.reload()
+      if (!registry) return
       loadedBindings = current
       current = rosterBindings()
     } while (current !== loadedBindings)
@@ -290,7 +343,7 @@ export async function createAccountLimits(options: {
     const snapshot = snapshotWithProbeEvidence()
     return options.consumer.routingRows().map((row) => {
       const current = binding(row.id)
-      const blockers = snapshot.marks
+      const blockers = (snapshot?.marks ?? [])
         .filter(
           (mark) =>
             sameAccount(mark.key.account, current.account) &&
@@ -315,11 +368,13 @@ export async function createAccountLimits(options: {
       }
     })
   }
+  // Keep the same facade after losing the registry. Returning no limits would
+  // activate the hosts' standalone in-memory marks instead of disabling tracking.
   return {
     candidates,
     async marks() {
       const view = await candidates()
-      if (registry.lastFailure) options.onError?.(registry.lastFailure)
+      if (registry?.lastFailure) options.onError?.(registry.lastFailure)
       return new Map(
         view
           .filter((row) => !row.ready)
@@ -331,21 +386,34 @@ export async function createAccountLimits(options: {
     },
     async beforeDispatch(route) {
       await reloadForRoster()
-      return !(await registry.beforeDispatch(binding(route))).blocked
+      const view = await registry?.beforeDispatch(binding(route))
+      return !registry || !view?.blocked
     },
     observe(route) {
       snapshotWithProbeEvidence()
       const current = binding(route)
       return {
-        ...registry.observe(current),
+        ...(registry?.observe(current) ?? {
+          binding: current,
+          baseRevision: 0,
+        }),
         observedAt: now(),
         rateProbe:
+          !!registry &&
           (rateDeadlines.get(probeKey(current.account)) ??
             Number.POSITIVE_INFINITY) <= now(),
-        paymentProbe: paymentDeadlines.has(probeKey(current.account)),
+        paymentProbe:
+          !!registry && paymentDeadlines.has(probeKey(current.account)),
       }
     },
     mark(observation, mark, evidenceAt = now()) {
+      if (!registry) {
+        if (!disabled.loggedDroppedReply) {
+          disabled.loggedDroppedReply = true
+          warn('claustrum-auth: limit reply dropped; tracking disabled')
+        }
+        return
+      }
       const key = probeKey(observation.binding.account)
       retainDeadline(key, mark.cause, mark.until)
       registry.enqueue({
@@ -361,6 +429,7 @@ export async function createAccountLimits(options: {
       })
     },
     clear(observation, cause) {
+      if (!registry) return
       if (cause === 'rate-limit')
         rateDeadlines.delete(probeKey(observation.binding.account))
       if (cause === 'payment-balance')
@@ -376,8 +445,12 @@ export async function createAccountLimits(options: {
         cause,
       })
     },
-    flush: () => registry.flush(),
-    dispose: () => registry.dispose(),
+    flush: async () => {
+      await registry?.flush()
+    },
+    dispose: async () => {
+      await (registry?.dispose() ?? released)
+    },
   }
 }
 
