@@ -6,6 +6,9 @@
 // this file.
 import { expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
+import { readdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { fixtureEntries } from '../test-entry.ts'
 import { harness, row } from './fakes.ts'
 
 let earlier = ''
@@ -19,4 +22,18 @@ test('a scratch folder exists while its test runs', async () => {
 test('the scratch folder of the previous test is gone', () => {
   expect(earlier).not.toBe('')
   expect(existsSync(earlier)).toBe(false)
+})
+
+test('a single-provider harness does not create unrelated roster files', async () => {
+  const h = await harness(
+    [row('a')],
+    'opencode1',
+    undefined,
+    fixtureEntries.slice(0, 1),
+  )
+  expect([...h.consumers.keys()]).toEqual(['fixture-a'])
+  expect(existsSync(h.hub.rosterPath('fixture-a'))).toBe(true)
+  expect(await readdir(dirname(h.hub.rosterPath('fixture-a')))).toEqual([
+    'fixture-a.json',
+  ])
 })

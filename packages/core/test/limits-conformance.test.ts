@@ -46,9 +46,13 @@ async function world(
   host: Host,
   service = 'fixture-a',
   rows = [row('a'), row('b')],
+  table: typeof fixtureEntries = fixtureEntries.slice(0, 1),
 ) {
   let time = 1000
-  const h = await harness(rows, host, () => time)
+  // Most vectors route one provider. Other provider entries would still acquire
+  // locks and write empty private rosters; only the cross-provider vector needs
+  // entries for more than one provider.
+  const h = await harness(rows, host, () => time, table)
   const queued: Response[] = []
   const wire: Request[] = []
   let transport = async (request: Request) => {
@@ -279,10 +283,12 @@ vector(
   15,
   'same-roster owners share marks while another provider stays isolated',
   async (host) => {
-    const w = await world(host, 'fixture-a', [
-      row('a'),
-      row('other', { providerIds: ['fixture-b'] }),
-    ])
+    const w = await world(
+      host,
+      'fixture-a',
+      [row('a'), row('other', { providerIds: ['fixture-b'] })],
+      fixtureEntries,
+    )
     await markReply(w, 429, '120')
     const peer = await createAccountLimits({
       provider: 'fixture-a',
@@ -519,14 +525,17 @@ for (const [id, service, bodies] of [
     id,
     `${service} unconfirmed payment replies do not mark or advance`,
     async (host) => {
+      const w = await world(host, service)
       for (const body of bodies) {
-        const w = await world(host, service)
         const response = await markReply(w, 402, '17', body)
         expect(response.status).toBe(402)
         expect(await response.text()).toBe(body)
         expect(w.h.reads).toEqual(['a'])
         expect(await w.blockers()).toEqual([])
         expect(w.h.reports).toEqual([])
+        // No reply in this vector changes state. Retain the same isolated
+        // registry, but record each reply's vault reads independently.
+        w.h.reads.length = 0
       }
     },
   )

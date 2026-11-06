@@ -74,8 +74,9 @@ export async function harness(
   rows = [row('a')],
   host: Host = 'opencode1',
   now?: () => number,
+  table = fixtureEntries,
 ) {
-  return withTable(rows, host, fixtureEntries, 'fixture-a', now)
+  return withTable(rows, host, table, 'fixture-a', now)
 }
 
 // The same harness over the shipped table: the hub's members and the vault

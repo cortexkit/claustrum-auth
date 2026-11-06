@@ -48,15 +48,19 @@ async function world(
     rows: Array.from({ length: options.count ?? 2 }, (_, i) =>
       row(`a${i + 1}`),
     ),
-    table: table.map((entry) =>
-      entry.service === provider
-        ? {
-            ...entry,
-            service: options.service ?? provider,
-            handshakeOrigins: ['wss://fixture.invalid'],
-          }
-        : entry,
-    ),
+    // These hooks route only fixture-a; other provider-table entries would
+    // still write empty owner-only rosters during every discovery.
+    table: table
+      .filter((entry) => entry.service === provider)
+      .map((entry) =>
+        entry.service === provider
+          ? {
+              ...entry,
+              service: options.service ?? provider,
+              handshakeOrigins: ['wss://fixture.invalid'],
+            }
+          : entry,
+      ),
     observe(id, installation) {
       if (id === provider) {
         installation.on('limit', (event) => {

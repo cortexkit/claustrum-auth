@@ -326,11 +326,13 @@ test('shared vault fixtures retain the real metadata spelling and refresher pres
   })
 })
 
-test('real vault metadata serves API keys on every host and refuses missing authMethod', () =>
-  withTestTiming(
-    'real vault metadata serves API keys on every host and refuses missing authMethod',
-    async () => {
-      for (const host of hosts) {
+// Each host builds a separate discovery hub and private roster tree. Give each
+// independent fixture its own test lifecycle instead of retaining three hubs.
+for (const host of hosts)
+  test(`real vault metadata serves API keys on every host and refuses missing authMethod (${host})`, () =>
+    withTestTiming(
+      `real vault metadata serves API keys on every host and refuses missing authMethod (${host})`,
+      async () => {
         const h = await liveHarness(realVaultRows, host)
         const expected = [
           ['cerebras', 'apikey:cerebras'],
@@ -379,7 +381,15 @@ test('real vault metadata serves API keys on every host and refuses missing auth
         const refusals = await vaultMenuText(
           {
             authority: async () => 'vault',
-            hub: h.hub,
+            // The inventory is unchanged: render the discovery we just tested,
+            // rather than writing every provider's discovery lock a second time.
+            // Menu refresh behavior is exercised separately in menu.test.ts.
+            hub: {
+              refresh: async () => {},
+              watchState: () => h.hub.watchState(),
+              keptReceiptState: () => h.hub.keptReceiptState(),
+              refusals: () => h.hub.refusals(),
+            },
             consumers: h.consumers,
             providerStatus: () => 'available',
           },
@@ -390,6 +400,5 @@ test('real vault metadata serves API keys on every host and refuses missing auth
           'apikey:missing-auth-method: unknown-auth-method',
         )
         expect(h.reads).not.toContain('apikey:missing-auth-method')
-      }
-    },
-  ))
+      },
+    ))
