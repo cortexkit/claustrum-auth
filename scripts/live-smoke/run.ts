@@ -16,6 +16,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { freePort } from '../../packages/opencode/test/v2/e2e/host.ts'
 import { PiRpc } from '../../packages/pi/test/rpc.ts'
+import { packedRecords } from '../npm-pack-json.ts'
 
 export const repo = fileURLToPath(new URL('../../', import.meta.url))
 export type Host = 'opencode1' | 'opencode2' | 'pi'
@@ -584,7 +585,8 @@ async function install(r: Runner) {
     '--ignore-scripts',
   ])
   if (packed.code !== 0) throw new SmokeError('PackFailed')
-  const name = (JSON.parse(packed.text) as { filename: string }[])[0]?.filename
+  const name = packedRecords<{ filename?: string }>(JSON.parse(packed.text))[0]
+    ?.filename
   if (!name || path.basename(name) !== name)
     throw new SmokeError('InvalidPackFilename')
   const sdk: string[] = []

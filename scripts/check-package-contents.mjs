@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { isBuiltin } from 'node:module'
 import path from 'node:path'
 import { assertImportShape } from './check-externals.ts'
+import { packedRecords } from './npm-pack-json.ts'
 
 export function assertPackageContents(files, label) {
   const names = files.map((file) =>
@@ -83,7 +84,8 @@ export async function checkPackageContents(root = process.cwd()) {
         shell: process.platform === 'win32',
       },
     )
-    const [pack] = JSON.parse(output)
+    const [pack] = packedRecords(JSON.parse(output))
+    if (!pack) throw new Error(`npm pack returned no package for ${name}`)
     assertPackageContents(pack.files, name)
     const pkg = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8'))
     assertPackageEntries(pkg, pack.files)
