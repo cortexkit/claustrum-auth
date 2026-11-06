@@ -245,27 +245,29 @@ test('disabled tracking drops limit replies with one redacted log per process an
   ])
 })
 
-test('symlinked state folder shares the real-path namespace and live marks', async () => {
-  const { h, route, options } = await setup()
-  const alias = join(h.dir, 'alias')
-  await symlink(
-    dirname(options.path),
-    alias,
-    process.platform === 'win32' ? 'junction' : 'dir',
-  )
-  const real = await createAccountLimits(options)
-  const linked = await createAccountLimits({
-    ...options,
-    path: join(alias, basename(options.path)),
-  })
-  try {
-    expect(real.observe(route).binding.account.namespace).toBe(
-      linked.observe(route).binding.account.namespace,
-    )
-    real.mark(real.observe(route), mark)
-    expect(await linked.marks()).toEqual(new Map([[route, 121000]]))
-  } finally {
-    await real.dispose()
-    await linked.dispose()
-  }
-})
+// Windows owner-only files refuse a state folder reached through a reparse
+// point (junction or symlink) before any read, so an aliased roster path can't
+// serve there and has no namespace to share.
+test.skipIf(process.platform === 'win32')(
+  'symlinked state folder shares the real-path namespace and live marks',
+  async () => {
+    const { h, route, options } = await setup()
+    const alias = join(h.dir, 'alias')
+    await symlink(dirname(options.path), alias, 'dir')
+    const real = await createAccountLimits(options)
+    const linked = await createAccountLimits({
+      ...options,
+      path: join(alias, basename(options.path)),
+    })
+    try {
+      expect(real.observe(route).binding.account.namespace).toBe(
+        linked.observe(route).binding.account.namespace,
+      )
+      real.mark(real.observe(route), mark)
+      expect(await linked.marks()).toEqual(new Map([[route, 121000]]))
+    } finally {
+      await real.dispose()
+      await linked.dispose()
+    }
+  },
+)
