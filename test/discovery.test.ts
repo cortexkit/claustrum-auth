@@ -19,6 +19,11 @@ test('Bun discovery prunes generated target tests before loading them', () => {
       readFileSync(new URL('../bunfig.toml', import.meta.url)),
     )
     mkdirSync(path.join(root, 'test'))
+    // The copied bunfig preloads test/preload.ts; without it every run fails.
+    writeFileSync(
+      path.join(root, 'test/preload.ts'),
+      readFileSync(new URL('./preload.ts', import.meta.url)),
+    )
     mkdirSync(path.join(root, 'target/scratch'), { recursive: true })
     writeFileSync(
       path.join(root, 'test/discovery-probe.test.ts'),
