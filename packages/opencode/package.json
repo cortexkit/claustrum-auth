@@ -33,10 +33,10 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@cortexkit/claustrum-client": "^0.15.0",
-    "@cortexkit/common-auth": "^0.40.0",
+    "@cortexkit/claustrum-client": "^0.16.0",
+    "@cortexkit/common-auth": "^0.41.1",
     "@cortexkit/private-files": "^0.2.2",
-    "@cortexkit/subc-client": "^0.22.10"
+    "@cortexkit/subc-client": "^0.24.0"
   },
   "devDependencies": {
     "@cortexkit/claustrum-auth-core": "workspace:*"

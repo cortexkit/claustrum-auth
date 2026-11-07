@@ -19,10 +19,10 @@
       "name": "@cortexkit/claustrum-auth-core",
       "version": "0.0.0",
       "dependencies": {
-        "@cortexkit/claustrum-client": "^0.15.0",
-        "@cortexkit/common-auth": "^0.40.0",
+        "@cortexkit/claustrum-client": "^0.16.0",
+        "@cortexkit/common-auth": "^0.41.1",
         "@cortexkit/private-files": "^0.2.2",
-        "@cortexkit/subc-client": "^0.22.10",
+        "@cortexkit/subc-client": "^0.24.0",
       },
     },
     "packages/opencode": {
@@ -32,10 +32,10 @@
         "claustrum-auth": "./dist/setup-bin.js",
       },
       "dependencies": {
-        "@cortexkit/claustrum-client": "^0.15.0",
-        "@cortexkit/common-auth": "^0.40.0",
+        "@cortexkit/claustrum-client": "^0.16.0",
+        "@cortexkit/common-auth": "^0.41.1",
         "@cortexkit/private-files": "^0.2.2",
-        "@cortexkit/subc-client": "^0.22.10",
+        "@cortexkit/subc-client": "^0.24.0",
       },
       "devDependencies": {
         "@cortexkit/claustrum-auth-core": "workspace:*",
@@ -53,10 +53,10 @@
       "name": "@cortexkit/pi-claustrum-auth",
       "version": "0.1.3",
       "dependencies": {
-        "@cortexkit/claustrum-client": "^0.15.0",
-        "@cortexkit/common-auth": "^0.40.0",
+        "@cortexkit/claustrum-client": "^0.16.0",
+        "@cortexkit/common-auth": "^0.41.1",
         "@cortexkit/private-files": "^0.2.2",
-        "@cortexkit/subc-client": "^0.22.10",
+        "@cortexkit/subc-client": "^0.24.0",
       },
       "devDependencies": {
         "@cortexkit/claustrum-auth-core": "workspace:*",
@@ -152,9 +152,9 @@
 
     "@cortexkit/claustrum-auth-core": ["@cortexkit/claustrum-auth-core@workspace:packages/core"],
 
-    "@cortexkit/claustrum-client": ["@cortexkit/claustrum-client@0.15.0", "", { "dependencies": { "@cortexkit/store": "^0.2.1", "@cortexkit/subc-client": "^0.22.0" } }, "sha512-1foTSPsqwB2lyUtK5XWUgONUyi7ef9KNysf1MZxsnuD5LzV2kP9kFDvDuGfdRnQWMWrXnUmdCc1zZcqpFNvUEQ=="],
+    "@cortexkit/claustrum-client": ["@cortexkit/claustrum-client@0.16.0", "", { "dependencies": { "@cortexkit/store": "^0.2.3", "@cortexkit/subc-client": "^0.24.0" } }, "sha512-K2iY0j0pJscnmjs3Z5cXxL2sJPuAuf/EnaYM1/6CCmMGgenibp8yaaPu0ijxOztWxxyJwtzIrHCdVKtzMtdmSw=="],
 
-    "@cortexkit/common-auth": ["@cortexkit/common-auth@0.40.0", "", { "dependencies": { "@cortexkit/private-files": "^0.2.2", "jsonc-parser": "^3.3.1" }, "peerDependencies": { "@cortexkit/claustrum-client": ">=0.6.2", "@cortexkit/subc-client": "^0.16.0 || ^0.22.0", "@opencode/plugin": ">=2.0.21", "@opentui/core": ">=0.4.5", "@opentui/solid": ">=0.4.5", "solid-js": ">=1.9.12 <2" }, "optionalPeers": ["@cortexkit/claustrum-client", "@cortexkit/subc-client", "@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"] }, "sha512-P0rfQ+fRXTBhAAG0rWkcP2CXkDb32Zplo37qpQx6TINHi78yzp8kNEnHSSwSeEReH5imh7hptg9L69AYCg4Jdw=="],
+    "@cortexkit/common-auth": ["@cortexkit/common-auth@0.41.1", "", { "dependencies": { "@cortexkit/private-files": "^0.2.2", "jsonc-parser": "^3.3.1" }, "peerDependencies": { "@cortexkit/claustrum-client": ">=0.6.2", "@cortexkit/subc-client": "^0.16.0 || ^0.22.0 || ^0.24.0", "@opencode/plugin": ">=2.0.21", "@opentui/core": ">=0.4.5", "@opentui/solid": ">=0.4.5", "solid-js": ">=1.9.12 <2" }, "optionalPeers": ["@cortexkit/claustrum-client", "@cortexkit/subc-client", "@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"] }, "sha512-P8yBv4Chqr9lAqbs3ndCFfDy5gWKnnqrNg7hcuJE3Tc60sbk9gji64IXyze2casSgLR3LVFC4kml5jJORJlg2A=="],
 
     "@cortexkit/opencode-claustrum-auth": ["@cortexkit/opencode-claustrum-auth@workspace:packages/opencode"],
 
@@ -164,7 +164,7 @@
 
     "@cortexkit/store": ["@cortexkit/store@0.2.3", "", { "dependencies": { "@cortexkit/private-files": "^0.2.0" } }, "sha512-cOCjAhb2rJp9u71xHXTlb2tS67237hHVN5DCB+aVh9S/FSu1UjOj8j/LjTSnVAZYXrNuWWb8eoQghiEcDtNT8g=="],
 
-    "@cortexkit/subc-client": ["@cortexkit/subc-client@0.22.10", "", {}, "sha512-BB1Gh9Oho5yPT+3E0fn3ZbBRQeZk3CSzRagu5TZr6qfHjQyFRRcH0eVg1ueqrtW2yKzBzinB8m6agM074v1DAA=="],
+    "@cortexkit/subc-client": ["@cortexkit/subc-client@0.24.0", "", {}, "sha512-adx2FoWdJqqEyOOChX3I7SKOUhoxDohK1lCn6Kj4OQvB4jIKONJ/8MoCc/jDnRidoiOx+k+K/nZcybHMYbBc5Q=="],
 
     "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@1.3.0", "", { "dependencies": { "@earendil-works/pi-ai": "1.3.0", "typebox": "1.3.27" } }, "sha512-2jvpxZs47PFD5mSQb/yK0pGHJ5yO7Nu22u9mFjHbSLRgu62vZ9rupimDSIp4arnqOadyv0AWvYHtCSpFoJV7ag=="],
 

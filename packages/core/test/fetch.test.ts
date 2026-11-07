@@ -546,6 +546,31 @@ test('fresh physical sends use library TTL checks and kept 401s are never report
   expect(h.reports).toEqual([])
 })
 
+test('route_busy on a send keeps serving the key previously served for the account', async () => {
+  const h = await harness([row('a')])
+  const authorizations: (string | null)[] = []
+  const fetch = createFetch({
+    entry: fixtureEntries[0],
+    placeholder,
+    consumer: h.consumer,
+    fetch: async (input) => {
+      authorizations.push((input as Request).headers.get('authorization'))
+      return new Response('served-ok')
+    },
+  })
+  expect(
+    await (await fetch('https://fixture.invalid', { headers: bearer })).text(),
+  ).toBe('served-ok')
+  h.setGet(async () => {
+    throw Object.assign(new Error('no free route slot'), { code: 'route_busy' })
+  })
+  const kept = await fetch('https://fixture.invalid', { headers: bearer })
+  expect(kept.status).toBe(200)
+  expect(await kept.text()).toBe('served-ok')
+  expect(h.reads).toEqual(['a', 'a'])
+  expect(authorizations).toEqual(['Bearer secret-a-1', 'Bearer secret-a-1'])
+})
+
 test('owned empty and inactive providers refuse locally but remain registered', async () => {
   const h = await harness()
   expect(h.consumers.size).toBe(3)
