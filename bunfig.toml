@@ -1,4 +1,5 @@
 [test]
+preload = ["./test/preload.ts"]
 # Unprefixed test arguments are substring filters, so Bun walks the repository
 # first and follows directory symlinks. target/ holds scratch toolchains and a
 # symlink-to-parent safety fixture; following that loop exhausted Bun's memory

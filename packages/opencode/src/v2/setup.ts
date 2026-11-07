@@ -11,7 +11,10 @@ import {
   unsavedRosterCause,
   vaultMenuText,
 } from '@cortexkit/claustrum-auth-core'
-import type { ClaustrumDiscoveryHub } from '@cortexkit/common-auth/claustrum'
+import {
+  type ClaustrumDiscoveryHub,
+  connectVaultHost,
+} from '@cortexkit/common-auth/claustrum'
 import {
   installOpenCode2Auth,
   type OpenCode2AuthInstallation,
@@ -53,8 +56,8 @@ export interface ServerDeps {
   table: readonly ProviderEntry[]
   /** Builds the hub and its members for the providers this host knows. */
   createCore(facts: HostFacts): ServerCore
-  /** This host's account mode, read fresh from the enrollment files. */
-  authority(): Promise<'vault' | 'local' | 'unreadable'>
+  /** This host's account mode, read fresh for each operation. */
+  authority(): Promise<'host' | 'vault' | 'local' | 'unreadable'>
   now?: () => number
   /** Errors that never reach the host: discovery, 401 reports. */
   onError?: (error: unknown) => void
@@ -162,8 +165,18 @@ export async function setupServer(ctx: SetupContext, deps: ServerDeps) {
   // success stores the placeholder that makes later requests the plugin's.
   // A refusal stores nothing in the host; the message names the fix.
   async function activate(provider: string) {
-    if ((await deps.authority()) !== 'vault')
-      throw new Error(vaultOffText(provider))
+    const authority = await deps.authority()
+    if (authority === 'host') {
+      try {
+        const client = connectVaultHost('claustrum-auth')
+        // The availability probe owns its client, so it closes only that client.
+        await Promise.resolve(client.close()).catch(() => undefined)
+      } catch {
+        throw new Error(unreachableText(provider))
+      }
+      return
+    }
+    if (authority !== 'vault') throw new Error(vaultOffText(provider))
     const built = await ready()
     try {
       await built.hub.refresh()

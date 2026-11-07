@@ -11,6 +11,7 @@ export {
 export { hasBalanceRule, isBalanceFailure } from './balance.js'
 export type { CoreFetch, FetchOptions } from './fetch.js'
 export { createFetch, maxBodyBytes } from './fetch.js'
+export { hasVaultHost } from './host.js'
 export type {
   AccountLimits,
   CoreLimits,

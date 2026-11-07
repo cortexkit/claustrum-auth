@@ -7,8 +7,8 @@ import {
 import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
 import {
   connectClaustrumScopedClient,
-  enrollmentAuthority,
   hostEnrollmentPaths,
+  vaultAuthority,
 } from '@cortexkit/common-auth/claustrum'
 import { opencodeStateDir } from '../state-dir.js'
 import type { ServerDeps } from './setup.ts'
@@ -19,7 +19,7 @@ export async function productionDeps(
 ): Promise<ServerDeps> {
   const stateDir = await opencodeStateDir(env)
   const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
-  const authority = () => enrollmentAuthority(paths, opencodeEnrollment)
+  const authority = () => vaultAuthority(paths, opencodeEnrollment)
   return {
     table: supportedProviders,
     authority,
@@ -28,7 +28,7 @@ export async function productionDeps(
         facts,
         stateDir,
         tokenPath: paths.tokenPath,
-        isCustodyActive: async () => (await authority()) === 'vault',
+        isCustodyActive: async () => (await authority()) !== 'local',
         connect: () =>
           connectClaustrumScopedClient({
             connectionFile: resolveClaustrumConnectionPath(),

@@ -29,7 +29,7 @@ export interface ActivationContext {
   auth: AuthApi
   flags: ReleasedFlags
   listed(provider: string): boolean
-  // Fresh `enrollmentAuthority()` and a hub refresh; resolves whether vault
+  // Fresh `vaultAuthority()` and a hub refresh; resolves whether vault
   // mode is on and whether the provider has a routable vault row. `unsaved`
   // names why the vault's list for the provider could not be saved, when the
   // vault answered but the plugin still holds no list for it.

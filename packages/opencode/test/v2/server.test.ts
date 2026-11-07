@@ -20,6 +20,7 @@ import {
   type VaultAttempt,
 } from '../../src/v2/adapter.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
+import { productionDeps } from '../../src/v2/vault.ts'
 import { phaseClock } from '../phase-clock.ts'
 import {
   type FakeHost,
@@ -1247,4 +1248,60 @@ test('a 429 error frame marks the account and the next handshake goes to the nex
     expect.objectContaining({ credentialId: 'a2', recordVersion: 5 }),
   ])
   clock.done()
+})
+
+for (const hosted of ['missing', 'relay'] as const) {
+  test(`hosted OpenCode 2 ${hosted}: owned requests never fall back and the menu stays hosted`, async () => {
+    const { host, vault, relay } = await startServer({ hosted })
+    host.selected.set('fixture-a', { type: 'key', key: 'seeded-user-key' })
+    if (hosted === 'missing') {
+      await expect(login(host, 'fixture-a')).rejects.toThrow(
+        'could not be reached',
+      )
+      await expect(
+        send(host, 'fixture-a', post(`${origin}/v1`, bearer('fixture-a'))),
+      ).rejects.toThrow('no vault account for fixture-a')
+      expect(vault.reads).toEqual([])
+    } else {
+      expect(await login(host, 'fixture-a')).toMatchObject({
+        type: 'oauth',
+        access: placeholderSecret('fixture-a'),
+      })
+      expect(relay?.closed()).toBe(1)
+      const sent = await send(
+        host,
+        'fixture-a',
+        post(`${origin}/v1`, bearer('fixture-a')),
+      )
+      expect(sent.request.headers.get('authorization')).toBe(
+        'Bearer secret-a1-1',
+      )
+      expect(vault.reads).toEqual(['a1'])
+      expect(relay?.calls.every((id) => id === 'claustrum-auth')).toBe(true)
+    }
+    expect(vault.connects).toBe(0)
+    await host.commands
+      .get('claustrum')
+      ?.execute({ sessionID: 's', prompt: { text: '/claustrum' } })
+    expect(host.synthetic.at(-1)?.text).toContain('Served by Thalamus')
+    expect(host.synthetic.at(-1)?.text).not.toMatch(
+      /\bConnect\b|\bDisconnect\b/,
+    )
+    const reads = [...vault.reads]
+    const foreign = post(`${origin}/v1`, {
+      authorization: 'Bearer independent-user-key',
+    })
+    expect((await send(host, 'fixture-a', foreign)).request).toBe(foreign)
+    expect(vault.reads).toEqual(reads)
+  })
+}
+
+test('hosted production dependencies read authority afresh without enrollment', async () => {
+  const { dir } = await startServer({ hosted: 'missing' })
+  const deps = await productionDeps({ OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: dir })
+  expect(await deps.authority()).toBe('host')
+  delete process.env.CORTEXKIT_VAULT_HOST
+  expect(await deps.authority()).toBe('local')
+  process.env.CORTEXKIT_VAULT_HOST = 'thalamus'
+  expect(await deps.authority()).toBe('host')
 })

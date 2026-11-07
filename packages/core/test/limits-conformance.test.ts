@@ -666,6 +666,7 @@ vector(
       [process.execPath, '--eval', script, w.h.hub.rosterPath('fixture-a')],
       {
         cwd: fileURLToPath(new URL('..', import.meta.url)),
+        env: { ...process.env },
         stdout: 'pipe',
         stderr: 'pipe',
       },

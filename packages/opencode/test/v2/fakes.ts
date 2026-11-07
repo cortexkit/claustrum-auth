@@ -6,8 +6,13 @@ import { onTestFinished } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { ScopedInventoryRow } from '@cortexkit/claustrum-client'
-import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
+import {
+  type ClaustrumScopedClient,
+  hostEnrollmentPaths,
+  vaultAuthority,
+} from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { installVaultHost } from '../../../core/test/host.ts'
 import { deferTestTiming, testTiming } from '../../../core/test/phase-timing.ts'
 import { apiKeyRow } from '../../../core/test/vault-rows.ts'
 import {
@@ -281,6 +286,7 @@ export async function startServer(
     catalog?: readonly { id: string; integrationID?: string }[]
     offline?: boolean
     mode?: 'vault' | 'local'
+    hosted?: 'missing' | 'relay'
     table?: readonly ProviderEntry[]
     now?: () => number
     observe?: ServerDeps['observe']
@@ -303,20 +309,21 @@ export async function startServer(
   const tokenPath = path.join(dir, 'token.json')
   const writeStarted = performance.now()
   let renameAttempts: number | undefined
-  await testTiming().phase('token private write', () =>
-    writeJsonAtomic(
-      tokenPath,
-      {
-        token: '01'.repeat(32),
-        token_generation: 1,
-      },
-      {
-        onOutcome: (outcome) => {
-          renameAttempts = outcome.attempts
+  if (!options.hosted)
+    await testTiming().phase('token private write', () =>
+      writeJsonAtomic(
+        tokenPath,
+        {
+          token: '01'.repeat(32),
+          token_generation: 1,
         },
-      },
-    ),
-  )
+        {
+          onOutcome: (outcome) => {
+            renameAttempts = outcome.attempts
+          },
+        },
+      ),
+    )
   options.clock?.mark(
     `token write ${Math.round(performance.now() - writeStarted)}ms` +
       (renameAttempts === undefined
@@ -374,6 +381,9 @@ export async function startServer(
     options.catalog ??
       table.map((entry) => ({ id: entry.hosts.opencode2 as string })),
   )
+  const relay = options.hosted
+    ? installVaultHost(options.hosted === 'relay' ? client : undefined)
+    : undefined
   const errors: unknown[] = []
   // The core setup builds, for a test that withdraws a route on the consumer
   // the plugin holds.
@@ -382,7 +392,13 @@ export async function startServer(
     now: options.now,
     observe: options.observe,
     table: options.table ?? table,
-    authority: async () => vault.mode,
+    authority: options.hosted
+      ? () =>
+          vaultAuthority(
+            hostEnrollmentPaths({ stateDir: dir, host: 'opencode' }),
+            'claustrum-auth-opencode',
+          )
+      : async () => vault.mode,
     createCore: (facts) => {
       core = createTestCore(
         {
@@ -409,7 +425,7 @@ export async function startServer(
     host.dispose()
     await dispose()
   })
-  return { host, vault, errors, dir, lastCore: () => core }
+  return { host, vault, errors, dir, lastCore: () => core, relay }
 }
 
 let sessions = 0

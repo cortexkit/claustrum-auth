@@ -5,6 +5,7 @@ import {
   command,
   createCore,
   type Host,
+  hasVaultHost,
   opencodeEnrollment,
   type ProviderEntry,
   piEnrollment,
@@ -14,10 +15,11 @@ import { resolveClaustrumConnectionPath } from '@cortexkit/claustrum-client'
 import { printLine, processTerminal } from '@cortexkit/common-auth/auth-menu'
 import {
   connectClaustrumScopedClient,
-  enrollmentAuthority,
   hostEnrollmentPaths,
   readClaustrumEnrollmentStatus,
+  VAULT_HOST_CONNECT_REFUSAL,
   type VaultGrantReach,
+  vaultAuthority,
 } from '@cortexkit/common-auth/claustrum'
 import {
   detectHosts,
@@ -69,6 +71,7 @@ export async function runClaustrumSetup(
   io: SetupIO = {},
   options: ClaustrumSetupOptions = { table: supportedProviders, createCore },
 ) {
+  if (hasVaultHost()) throw new Error(VAULT_HOST_CONNECT_REFUSAL)
   const env = io.env ?? process.env
   const home = io.home ?? homedir()
   const terminal = io.terminal ?? processTerminal()
@@ -157,7 +160,7 @@ export async function runClaustrumSetup(
           connect: () =>
             connectClaustrumScopedClient({ connectionFile, logger: () => {} }),
           isCustodyActive: async () =>
-            (await enrollmentAuthority(paths, enrollment.name)) === 'vault',
+            (await vaultAuthority(paths, enrollment.name)) !== 'local',
           facts: {
             host: target,
             catalog: providers,

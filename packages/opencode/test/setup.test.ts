@@ -8,6 +8,7 @@ import {
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
 import { row } from '../../core/test/fakes.ts'
+import { installVaultHost } from '../../core/test/host.ts'
 import { createTestCore, fixtureEntries } from '../../core/test-entry.ts'
 import { runClaustrumSetup, vaultOnlyMessage } from '../src/setup.ts'
 import { resolveOpencodeStateDir } from '../src/state-dir.ts'
@@ -532,3 +533,19 @@ test.each(['detected', 'explicit'] as const)(
     expect(h.output()).not.toContain('In OpenCode 1, type next:')
   },
 )
+
+test('hosted setup refuses with the shared sentence before detection or any change on every host', async () => {
+  installVaultHost()
+  const io = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error('setup touched detection or IO')
+      },
+    },
+  )
+  for (const host of ['opencode', 'pi'])
+    await expect(runClaustrumSetup([`--host=${host}`], io)).rejects.toThrow(
+      "This host gets its vault accounts from Thalamus, so it can't connect to the vault itself.",
+    )
+})

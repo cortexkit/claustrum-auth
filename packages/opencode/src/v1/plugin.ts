@@ -2,6 +2,7 @@ import {
   type CoreLimits,
   type CoreOptions,
   command,
+  hasVaultHost,
   opencodeEnrollment,
   type ProviderEntry,
   reservedProviders,
@@ -15,8 +16,8 @@ import {
   type ClaustrumScopedClient,
   classifyVaultFailure,
   connectClaustrumScopedClient,
-  enrollmentAuthority,
   hostEnrollmentPaths,
+  vaultAuthority,
 } from '@cortexkit/common-auth/claustrum'
 import type { Hooks, PluginInput } from '@opencode-ai/plugin'
 import { opencodeStateDir } from '../state-dir.js'
@@ -88,21 +89,31 @@ export async function opencode1Hosts(
   const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
   const isCustodyActive =
     options.isCustodyActive ??
-    (async () =>
-      (await enrollmentAuthority(paths, opencodeEnrollment)) === 'vault')
+    (async () => (await vaultAuthority(paths, opencodeEnrollment)) !== 'local')
   const catalog = options.table
     .map((entry) => entry.hosts.opencode1)
     .filter((id): id is string => !!id)
-  const key = JSON.stringify([stateDir, paths.tokenPath, catalog])
+  const connectionFile = hasVaultHost()
+    ? undefined
+    : resolveClaustrumConnectionPath()
+  const key = JSON.stringify([
+    'claustrum-auth',
+    hasVaultHost() ? 'host' : connectionFile,
+    stateDir,
+    paths.tokenPath,
+    catalog,
+  ])
   let shared = registry.get(key)
   if (!shared) {
-    const connectionFile = resolveClaustrumConnectionPath()
     const core = options.createCore({
       stateDir,
       tokenPath: paths.tokenPath,
       connect:
         options.connect ??
-        (() => connectClaustrumScopedClient({ connectionFile })),
+        (() =>
+          connectClaustrumScopedClient({
+            connectionFile: connectionFile ?? resolveClaustrumConnectionPath(),
+          })),
       isCustodyActive,
       // The plugin cannot see OpenCode 1's models catalog from its config
       // hook, so the table stands in for it: an entry gets an opencode1 id
@@ -269,9 +280,9 @@ export async function opencode1Hosts(
         text = await vaultMenuText(
           {
             authority: async () => {
-              if (options.isCustodyActive)
+              if (options.isCustodyActive && !hasVaultHost())
                 return (await isCustodyActive()) ? 'vault' : 'local'
-              return enrollmentAuthority(paths, opencodeEnrollment)
+              return vaultAuthority(paths, opencodeEnrollment)
             },
             hub: core.hub,
             consumers: core.consumers,

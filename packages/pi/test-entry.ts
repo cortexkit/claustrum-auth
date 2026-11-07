@@ -30,6 +30,8 @@ export interface PiTestConfig {
    * can point a live provider at the mock. Every other origin stays refused.
    */
   shipped?: boolean
+  /** Fail a hosted test if the plugin attempts its native connection. */
+  forbidNativeConnect?: boolean
   /**
    * Make one provider's roster commits fail: a folder stands at its roster
    * file's path, so the hub can neither read nor write that file, until the
@@ -123,7 +125,11 @@ const extension = createPiExtension({
     }
     return core
   },
-  connect: async () => client,
+  connect: async () => {
+    if (config.forbidNativeConnect)
+      throw new Error('native connector was called')
+    return client
+  },
   syncIntervalMs: config.syncMs ?? 200,
 })
 

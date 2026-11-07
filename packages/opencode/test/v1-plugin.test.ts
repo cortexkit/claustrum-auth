@@ -9,6 +9,7 @@ import {
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
 import type { PluginInput } from '@opencode-ai/plugin'
 import { harness, row } from '../../core/test/fakes.ts'
+import { installVaultHost } from '../../core/test/host.ts'
 import type { ServingConsumer } from '../../core/test-entry.ts'
 import { createTestCore, fixtureEntries } from '../../core/test-entry.ts'
 import { opencodeStateDir } from '../src/state-dir.ts'
@@ -217,7 +218,10 @@ type LooseConfig = {
   >
 }
 
-async function pluginHarness(extraRows: ReturnType<typeof row>[] = []) {
+async function pluginHarness(
+  extraRows: ReturnType<typeof row>[] = [],
+  hosted?: 'missing' | 'relay',
+) {
   const root = scratchRoot()
   await mkdir(root, { recursive: true })
   const profile = await mkdtemp(path.join(root, 'opencode1-plugin-'))
@@ -290,10 +294,15 @@ async function pluginHarness(extraRows: ReturnType<typeof row>[] = []) {
     },
     serverUrl: new URL('http://127.0.0.1:1'),
   } as unknown as PluginInput
-  await writeJsonAtomic(
-    hostEnrollmentPaths({ stateDir: dir, host: 'opencode' }).tokenPath,
-    { token: '01'.repeat(32), token_generation: 1 },
-  )
+  let nativeConnects = 0
+  const relay = hosted
+    ? installVaultHost(hosted === 'relay' ? client : undefined)
+    : undefined
+  if (!hosted)
+    await writeJsonAtomic(
+      hostEnrollmentPaths({ stateDir: dir, host: 'opencode' }).tokenPath,
+      { token: '01'.repeat(32), token_generation: 1 },
+    )
   const hooks = await opencode1Hosts(
     {
       table: fixtureEntries,
@@ -301,15 +310,29 @@ async function pluginHarness(extraRows: ReturnType<typeof row>[] = []) {
         const core = createTestCore(options)
         return core
       },
-      connect: async () => client,
-      isCustodyActive: async () => true,
+      connect: async () => {
+        nativeConnects++
+        return client
+      },
+      ...(hosted ? {} : { isCustodyActive: async () => true }),
       authApi: () => authApi,
       env: () => env,
       platform: 'linux',
     },
     input,
   )
-  return { hooks, stored, writes, shown, reads, env, dir, configDir }
+  return {
+    hooks,
+    stored,
+    writes,
+    shown,
+    reads,
+    env,
+    dir,
+    configDir,
+    relay,
+    nativeConnects: () => nativeConnects,
+  }
 }
 
 test('the config hook wraps every listed provider, keeps an earlier fetch and registers the command', async () => {
@@ -436,3 +459,64 @@ test('OpenCode 1 claustrum menu lists refusals and accounts, reorders, and remem
   expect(h.writes).toEqual([])
   await h.hooks.dispose?.()
 })
+
+for (const hosted of ['missing', 'relay'] as const) {
+  test(`hosted OpenCode 1 ${hosted}: owned requests never fall back, menu and placeholder stay native`, async () => {
+    const h = await pluginHarness([], hosted)
+    const sent: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: RequestInit,
+    ) => {
+      sent.push(new Request(input, init).headers.get('authorization') ?? '')
+      return new Response('ok')
+    }) as typeof fetch
+    try {
+      const config = { provider: {} } as LooseConfig
+      await h.hooks.config?.(config as never)
+      const request = config.provider[P].options.fetch
+      if (!request) throw new Error('missing provider fetch')
+      if (hosted === 'missing')
+        h.stored[P] = { type: 'api', key: placeholderFor(P) }
+      h.stored.other = { type: 'api', key: 'seeded-user-key' }
+      if (hosted === 'missing') {
+        await expect(request(url, { headers: bearer })).rejects.toThrow(
+          'could not be reached',
+        )
+        expect(sent).toEqual([])
+        expect(h.reads).toEqual([])
+      } else {
+        await expect(
+          h.hooks['command.execute.before']?.(
+            { command: commandName, arguments: `use ${P}`, sessionID: 's' },
+            { parts: [] },
+          ),
+        ).rejects.toThrow('__CLAUSTRUM_AUTH_COMMAND_HANDLED__')
+        await request(url, { headers: bearer })
+        expect(sent).toEqual(['Bearer secret-a'])
+        expect(h.reads).toEqual(['a'])
+        expect(h.stored[P]).toEqual({ type: 'api', key: placeholderFor(P) })
+        expect(h.relay?.calls).toEqual(['claustrum-auth'])
+      }
+      expect(h.nativeConnects()).toBe(0)
+      await expect(
+        h.hooks['command.execute.before']?.(
+          { command: commandName, arguments: '', sessionID: 's' },
+          { parts: [] },
+        ),
+      ).rejects.toThrow('__CLAUSTRUM_AUTH_COMMAND_HANDLED__')
+      expect(h.shown.at(-1)).toContain('Served by Thalamus')
+      expect(h.shown.at(-1)).not.toMatch(/\bConnect\b|\bDisconnect\b/)
+      const reads = [...h.reads]
+      await request(url, {
+        headers: { authorization: 'Bearer independent-user-key' },
+      })
+      expect(sent.at(-1)).toBe('Bearer independent-user-key')
+      expect(h.reads).toEqual(reads)
+    } finally {
+      globalThis.fetch = original
+      await h.hooks.dispose?.()
+    }
+  })
+}

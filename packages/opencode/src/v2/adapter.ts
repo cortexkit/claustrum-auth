@@ -260,7 +260,7 @@ export interface VaultAdapterOptions {
    * This host's account mode, read fresh, so a refusal for want of an
    * account can say that vault mode is off instead.
    */
-  authority?: () => Promise<'vault' | 'local' | 'unreadable'>
+  authority?: () => Promise<'host' | 'vault' | 'local' | 'unreadable'>
 }
 
 async function rebuild(request: Request, url: URL, headers: Headers) {
@@ -336,7 +336,7 @@ export function createVaultAdapter(
       mode = await options.authority?.()
     } catch {}
     return new Error(
-      mode === undefined || mode === 'vault'
+      mode === undefined || mode === 'vault' || mode === 'host'
         ? noAccountText(options.provider)
         : vaultOffText(options.provider),
     )

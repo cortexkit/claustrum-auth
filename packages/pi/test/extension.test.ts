@@ -3,12 +3,14 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
+import { openPiSlot } from '@cortexkit/common-auth/pi-slot'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import { harness } from '../../core/test/fakes.ts'
+import { harness, row } from '../../core/test/fakes.ts'
+import { installVaultHost } from '../../core/test/host.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
 import { FlagStore } from '../src/flags.ts'
@@ -180,23 +182,52 @@ test('Pi startup refusal names model registration and the remedy without echoing
 // after the roster read, and nothing is ever sent when it does.
 async function servedTurn(options: {
   withdraw?: (core: ReturnType<typeof createTestCore>) => void
+  hosted?: 'missing' | 'relay'
 }) {
-  const h = await harness([])
+  const h = await harness(options.hosted ? [row('a')] : [])
+  const relay = options.hosted
+    ? installVaultHost(options.hosted === 'relay' ? h.client : undefined)
+    : undefined
+  let nativeConnects = 0
   let core: ReturnType<typeof createTestCore> | undefined
   const agent = await agentDir({
+    enrolled: !options.hosted,
+    ...(options.hosted
+      ? {
+          auth: {
+            [servedProvider]: { type: 'api_key', key: 'seeded-user-key' },
+          },
+        }
+      : {}),
     flags: { [servedProvider]: { consented: true } },
   })
   process.env.PI_CODING_AGENT_DIR = agent.agent
+  if (options.hosted === 'missing')
+    await openPiSlot({
+      authPath: agent.authPath,
+      provider: servedProvider,
+      stashPath: path.join(agent.state, 'pi-slots', `${servedProvider}.json`),
+      placeholderKey: placeholderKey(servedProvider),
+    }).enterVault()
   let registered: Record<string, unknown> | undefined
   const handlers: Record<
     string,
     (event: unknown, ctx: unknown) => Promise<void>
   > = {}
+  let commandHandler:
+    | ((args: string, ctx: unknown) => Promise<void>)
+    | undefined
+  const notices: string[] = []
   const pi = {
     on(name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) {
       handlers[name] = handler
     },
-    registerCommand() {},
+    registerCommand(
+      _name: string,
+      command: { handler: typeof commandHandler },
+    ) {
+      commandHandler = command.handler
+    },
     unregisterProvider() {},
     registerProvider(_name: string, value: Record<string, unknown>) {
       registered = value
@@ -209,14 +240,25 @@ async function servedTurn(options: {
       ],
       refresh: async () => {},
     },
-    ui: { notify() {}, confirm: async () => true },
+    ui: {
+      notify(message: string) {
+        notices.push(message)
+      },
+      confirm: async () => true,
+    },
     cwd: process.cwd(),
   } as unknown as ExtensionContext
   createPiExtension({
     // The provider is registered while the session starts, so one core is
     // built and handed back on every later call.
     createCore(built) {
-      core ??= createTestCore({ ...built, connect: async () => h.client })
+      core ??= createTestCore({
+        ...built,
+        connect: async () => {
+          nativeConnects++
+          return h.client
+        },
+      })
       return core
     },
   })(pi)
@@ -229,6 +271,7 @@ async function servedTurn(options: {
   ) => AsyncIterable<{ error?: { errorMessage?: string } }>
   let sends = 0
   let message = ''
+  const authorizations: string[] = []
   for await (const event of stream(
     {
       provider: servedProvider,
@@ -241,15 +284,63 @@ async function servedTurn(options: {
     { messages: [] },
     {
       apiKey: placeholderKey(servedProvider),
-      fetch: async () => {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         sends++
+        authorizations.push(
+          new Request(input, init).headers.get('authorization') ?? '',
+        )
         return new Response('not a stream')
       },
     },
   ))
     message = event.error?.errorMessage ?? message
-  return { message, sends }
+  if (options.hosted) {
+    await commandHandler?.('', context)
+    expect(notices.at(-1)).toContain('Served by Thalamus')
+    expect(notices.at(-1)).not.toMatch(/\bConnect\b|\bDisconnect\b/)
+    expect(nativeConnects).toBe(0)
+    const reads = [...h.reads]
+    for await (const _event of stream(
+      {
+        provider: servedProvider,
+        id: 'm',
+        api: 'openai-completions',
+        baseUrl: 'https://fixture.invalid/v1',
+        input: ['text'],
+        output: ['text'],
+      },
+      { messages: [] },
+      {
+        apiKey: 'independent-user-key',
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          expect(new Request(input, init).headers.get('authorization')).toBe(
+            'Bearer independent-user-key',
+          )
+          return new Response('not a stream')
+        },
+      },
+    )) {
+    }
+    expect(h.reads).toEqual(reads)
+  }
+  await handlers.session_shutdown?.({}, context)
+  return { message, sends, authorizations, relay }
 }
+
+test('hosted Pi without a relay refuses an owned turn without falling back to a native key', async () => {
+  const { message, sends } = await servedTurn({ hosted: 'missing' })
+  expect(message).toContain(
+    'the Claustrum vault has no usable account for fixture-a',
+  )
+  expect(sends).toBe(0)
+})
+
+test('hosted Pi serves the relay vault key without enrollment or native connect', async () => {
+  const { sends, authorizations, relay } = await servedTurn({ hosted: 'relay' })
+  expect(sends).toBe(1)
+  expect(authorizations).toEqual(['Bearer secret-a-1'])
+  expect(relay?.calls).toEqual(['claustrum-auth'])
+})
 
 test('a route withdrawn while a turn is served gets the plugin text, and nothing is sent', async () => {
   const { message, sends } = await servedTurn({

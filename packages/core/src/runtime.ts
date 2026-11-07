@@ -34,6 +34,7 @@ export function createCoreWithTable(
     .map((entry) => entry.hosts[facts.host] as string)
     .sort()
   const hub = new ClaustrumDiscoveryHub({
+    pluginId: 'claustrum-auth',
     ...hubOptions,
     hostGeneration: facts.host,
     classifierInput: {

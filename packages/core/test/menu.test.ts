@@ -1,6 +1,9 @@
-import { expect, test } from 'bun:test'
+import { expect, onTestFinished, test } from 'bun:test'
+import path from 'node:path'
 import { vaultMenuText } from '../src/menu.ts'
+import { createTestCore } from '../test-entry.ts'
 import { harness, row } from './fakes.ts'
+import { installVaultHost } from './host.ts'
 
 test('vault menu shows ordered accounts, classification refusals, watch and provider state without local actions', async () => {
   const h = await harness([
@@ -132,4 +135,44 @@ test('account state shows declines for the account but not for a replacement acc
   rows[0] = row('first', { accountId: 'replacement-account' })
   expect(await vaultMenuText(options, 'accounts')).not.toContain(', declined')
   expect(h.reads).toEqual([])
+})
+
+test('hosted menu reorders relay accounts and keeps consumer decline and accept functional', async () => {
+  const fake = await harness([row('first'), row('second')])
+  installVaultHost(fake.client)
+  const core = createTestCore({
+    stateDir: path.join(fake.dir, 'hosted'),
+    tokenPath: path.join(fake.dir, 'absent-token'),
+    connect: async () => {
+      throw new Error('native connector called')
+    },
+    isCustodyActive: () => {
+      throw new Error('enrollment read')
+    },
+    facts: { host: 'opencode1', catalog: ['fixture-a'] },
+  })
+  onTestFinished(async () => {
+    await core.disposeLimits()
+    await core.hub.dispose()
+  })
+  await core.hub.refresh()
+  const consumer = core.consumers.get('fixture-a')
+  if (!consumer) throw new Error('missing consumer')
+  const options = {
+    ...core,
+    authority: async () => 'host' as const,
+    providerStatus: () => 'owned',
+  }
+  const ids = consumer.snapshot()?.rows.map((row) => row.routeId) ?? []
+  expect(
+    await vaultMenuText(options, `reorder fixture-a ${ids[1]} ${ids[0]}`),
+  ).toContain('order reordered')
+  expect(consumer.snapshot()?.rows.map((row) => row.credentialId)).toEqual([
+    'second',
+    'first',
+  ])
+  await consumer.decline(ids[0] as string)
+  expect(await vaultMenuText(options, 'accounts')).toContain(', declined')
+  await consumer.accept(ids[0] as string)
+  expect(await vaultMenuText(options, 'accounts')).not.toContain(', declined')
 })

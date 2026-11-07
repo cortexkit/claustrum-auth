@@ -26,8 +26,8 @@ import {
   type ClaustrumConsumer,
   type ClaustrumScopedClient,
   connectClaustrumScopedClient,
-  enrollmentAuthority,
   hostEnrollmentPaths,
+  vaultAuthority,
 } from '@cortexkit/common-auth/claustrum'
 import { openPiSlot, type PiSlot } from '@cortexkit/common-auth/pi-slot'
 import type {
@@ -72,7 +72,7 @@ export interface PiExtensionOptions {
   syncIntervalMs?: number
 }
 
-type Authority = 'vault' | 'local' | 'unreadable'
+type Authority = 'host' | 'vault' | 'local' | 'unreadable'
 
 interface Served {
   provider: string
@@ -354,7 +354,8 @@ class PiRuntime {
           'foreign'
         )
           return await inner(input, init)
-        if ((await this.#authority()) !== 'vault')
+        const authority = await this.#authority()
+        if (authority !== 'vault' && authority !== 'host')
           throw new ClaustrumAuthError('vault-mode-off')
         // A request sent right after Pi starts waits briefly for the first
         // account list instead of being refused for having none yet.
@@ -390,7 +391,7 @@ class PiRuntime {
     try {
       const authority = await this.#authority()
       if (authority !== 'unreadable') {
-        const notLocal = authority === 'vault'
+        const notLocal = authority !== 'local'
         if (notLocal !== this.#notLocal) {
           this.#notLocal = notLocal
           for (const served of this.served.values())
@@ -401,7 +402,9 @@ class PiRuntime {
         }
       }
       for (const served of this.served.values()) {
-        const routable = authority === 'vault' && this.routable(served)
+        const routable =
+          (authority === 'host' || authority === 'vault') &&
+          this.routable(served)
         if (routable !== served.state.routable)
           await this.dispatch(served, { type: 'discovery', routable })
       }
@@ -466,7 +469,8 @@ class PiRuntime {
       )
       return
     }
-    const vaultOn = (await this.#authority()) === 'vault'
+    const authority = await this.#authority()
+    const vaultOn = authority === 'host' || authority === 'vault'
     // The refresh joins a discovery already in flight, such as the first one
     // after Pi starts, so the decision below waits for the vault's answer.
     const listed =
@@ -579,7 +583,7 @@ class PiRuntime {
     )
     ctx.ui.notify(
       [
-        `claustrum-auth: vault mode ${authority === 'vault' ? 'on' : authority === 'local' ? 'off' : 'unreadable'}`,
+        `claustrum-auth: vault mode ${authority === 'host' || authority === 'vault' ? 'on' : authority === 'local' ? 'off' : 'unreadable'}`,
         text,
         usage,
       ].join('\n'),
@@ -606,7 +610,7 @@ async function startRuntime(
   const paths = hostEnrollmentPaths({ stateDir, host: 'pi' })
   const authority = async (): Promise<Authority> => {
     try {
-      return await enrollmentAuthority(paths, piEnrollment)
+      return await vaultAuthority(paths, piEnrollment)
     } catch {
       return 'unreadable'
     }
@@ -637,7 +641,7 @@ async function startRuntime(
             storagePath: paths.tokenPath,
             logger: () => {},
           })),
-      isCustodyActive: async () => (await authority()) === 'vault',
+      isCustodyActive: async () => (await authority()) !== 'local',
       onError: () => {},
       facts: { host: 'pi', catalog: [...apis.keys()].sort() },
     }),

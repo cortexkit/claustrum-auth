@@ -124,6 +124,7 @@ test(
           .join('\n'),
       )
       const child = Bun.spawn([process.execPath, probe], {
+        env: { ...process.env },
         stdout: 'pipe',
         stderr: 'pipe',
       })

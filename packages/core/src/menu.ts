@@ -7,6 +7,7 @@ import type {
 import {
   classifyVaultFailure,
   isDeclined,
+  VAULT_HOST_STATUS,
 } from '@cortexkit/common-auth/claustrum'
 import { command } from './names.js'
 
@@ -17,7 +18,7 @@ export type MenuHub = Pick<
 >
 
 export interface VaultMenuOptions {
-  authority(): Promise<'vault' | 'local' | 'unreadable'>
+  authority(): Promise<'host' | 'vault' | 'local' | 'unreadable'>
   hub: MenuHub
   consumers: ReadonlyMap<string, MenuConsumer>
   providerStatus(provider: string): string | Promise<string>
@@ -31,11 +32,12 @@ export async function vaultMenuText(
   options: VaultMenuOptions,
   args = '',
 ): Promise<string> {
-  // Re-read enrollment even for account lists and refused reorder requests.
+  // Re-read authority even for account lists and refused reorder requests.
   const authority = await options.authority().catch(() => 'unreadable' as const)
+  const vaultOn = authority === 'host' || authority === 'vault'
   const [verb = '', provider, ...ids] = args.trim().split(/\s+/u)
   if (verb === 'reorder') {
-    if (authority !== 'vault')
+    if (!vaultOn)
       return 'claustrum-auth: vault mode is off or unreadable; no order was changed.'
     const consumer = provider && options.consumers.get(provider)
     if (!consumer || !ids.length) return menuUsage
@@ -49,13 +51,12 @@ export async function vaultMenuText(
   if (verb && !['status', 'accounts', 'refusals'].includes(verb))
     return menuUsage
   if (provider) return menuUsage
-  let reachability: string =
-    authority === 'vault'
-      ? 'reachable'
-      : authority === 'local'
-        ? 'off'
-        : 'unreadable'
-  if (authority === 'vault') {
+  let reachability: string = vaultOn
+    ? 'reachable'
+    : authority === 'local'
+      ? 'off'
+      : 'unreadable'
+  if (vaultOn) {
     try {
       await options.hub.refresh()
     } catch (error) {
@@ -69,7 +70,7 @@ export async function vaultMenuText(
   if (!verb || verb === 'status') {
     const outage = options.hub.keptReceiptState()
     status.push(
-      `Vault mode: ${authority === 'vault' ? 'on' : authority === 'local' ? 'off' : 'unreadable'}`,
+      `Vault mode: ${authority === 'host' ? VAULT_HOST_STATUS : authority === 'vault' ? 'on' : authority === 'local' ? 'off' : 'unreadable'}`,
       `Watch: ${options.hub.watchState()}`,
       `Vault: ${reachability}`,
       `Outage receipts: ${outage.active ? 'active' : 'none'}`,
@@ -90,7 +91,7 @@ export async function vaultMenuText(
     status.push('Accounts (routing order):')
     for (const [provider, consumer] of options.consumers) {
       const roster = consumer.snapshot()
-      const rows = authority === 'vault' ? (roster?.rows ?? []) : []
+      const rows = vaultOn ? (roster?.rows ?? []) : []
       status.push(`${provider}: ${rows.length} vault account(s)`)
       for (const [index, row] of rows.entries()) {
         const declined = isDeclined(
@@ -106,7 +107,7 @@ export async function vaultMenuText(
     if (!options.consumers.size) status.push('No provider is available yet.')
   }
   if (!verb || verb === 'refusals') {
-    const refusals = authority === 'vault' ? options.hub.refusals() : undefined
+    const refusals = vaultOn ? options.hub.refusals() : undefined
     status.push('Refused vault rows:')
     if (!refusals) status.push('Unknown (no current complete discovery).')
     else {
