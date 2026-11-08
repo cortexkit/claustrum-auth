@@ -39,7 +39,7 @@ Each package keeps its tests in its own `test/`. `bunfig.toml` preloads `test/pr
 
 ## Where to add new code
 
-- **A new provider:** an entry in `supportedProviders` with its fleet ids, host ids and origins from the provider's own documentation, and its sources in `docs/providers.md`. Each of its fleet ids needs a row in the vault's provider catalog in group `llm-provider` first, because the plugin's grant is that category and `ck auth put` stamps groups only for catalog ids. Add it only after each host it lists passes the real-host checks for placement, origin and redirect refusal, scrubbing, and a real request (`docs/live-smoke.md`).
+- **A new provider:** an entry in `supportedProviders` with its fleet ids, host ids and origins from the provider's own documentation, and its sources in `docs/providers.md`. Each of its fleet ids needs a row in the vault's provider catalog in group `llm-provider` first, because the plugin's grant is that category and `ck auth put` stamps groups only for catalog ids. The vault row must also carry one of the entry's fleet ids in `provider_ids`; `classifyRow` refuses a row without one as unmapped. Add it only after each host it lists passes the real-host checks for placement, origin and redirect refusal, scrubbing, and a real request (`docs/live-smoke.md`).
 - **A provider's empty-balance rule:** `packages/core/src/balance.ts`, only for a 402 the provider documents as an empty balance.
 - **A refusal or status text:** the host's `messages.ts` or `ClaustrumAuthError` codes. Fixed text only, never request data or a vault reply.
 - **A host behaviour:** `packages/opencode/src/v1/`, `v2/` or `packages/pi/src/`. Logic every host needs goes in `packages/core/src/`.
