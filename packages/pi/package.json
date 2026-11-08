@@ -1,6 +1,6 @@
 {
   "name": "@cortexkit/pi-claustrum-auth",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Claustrum vault credentials for Pi",
   "type": "module",
   "license": "MIT",
