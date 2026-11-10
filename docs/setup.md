@@ -38,7 +38,9 @@ Vault mode is always on. `--claustrum` is accepted for compatibility;
 
 ## Approve enrollment and grant access
 
-Approve each host's separate enrollment in `ck auth`. Setup prints the exact
+Approve each host's separate enrollment in `ck auth`. The apps show
+"Model API keys for OpenCode" or "Model API keys for Pi" when you approve the
+connection. Setup prints the exact
 approval and grant commands and the resolved state paths. Enrollment alone
 does not grant credential access: follow the printed grant command for the
 `llm-provider` category before activating a provider.

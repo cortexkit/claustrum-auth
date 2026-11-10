@@ -298,6 +298,27 @@ test('test setup build enrolls once per host, discovers rows, prints provider ac
   )
 })
 
+test('setup proposes a person-facing display name for each vault host', async () => {
+  const root = await profile()
+  const h = setupIO(root)
+  await runClaustrumSetup(
+    ['setup', '--yes', '--enroll-only', '--host=opencode', '--host=pi'],
+    h.io,
+  )
+  expect(h.proposalInputs).toEqual([
+    {
+      name: 'claustrum-auth-opencode',
+      displayName: 'Model API keys for OpenCode',
+      requestSecretHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    },
+    {
+      name: 'claustrum-auth-pi',
+      displayName: 'Model API keys for Pi',
+      requestSecretHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    },
+  ])
+})
+
 test('setup refuses local sign-in and delegates enroll-only without host registration or credential reads', async () => {
   const root = await profile()
   const h = setupIO(root)

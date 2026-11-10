@@ -103,9 +103,14 @@ export async function runClaustrumSetup(
       hosts: {
         opencode: {
           name: opencodeEnrollment,
+          displayName: 'Model API keys for OpenCode',
           paths: { stateDir: states.opencode, host: 'opencode' },
         },
-        pi: { name: piEnrollment, paths: { stateDir: '', host: 'pi' } },
+        pi: {
+          name: piEnrollment,
+          displayName: 'Model API keys for Pi',
+          paths: { stateDir: '', host: 'pi' },
+        },
       },
     },
     beforeSignIn: async (host, context) => {

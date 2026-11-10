@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
+import type { ClaustrumEnrollmentClient } from '@cortexkit/common-auth/claustrum'
 import type { SetupIO } from '@cortexkit/common-auth/setup'
 import { bundleOptions } from '../../../scripts/build-options.ts'
 import type { runFixtureSetup } from '../setup-test-entry.ts'
@@ -67,6 +68,9 @@ export function setupIO(
     PATH: bin,
   }
   const proposals: string[] = []
+  const proposalInputs: Parameters<
+    ClaustrumEnrollmentClient['enrollPropose']
+  >[0][] = []
   const commands: { file: string; args: readonly string[] }[] = []
   let output = ''
   const isLauncher = (file: string) =>
@@ -120,7 +124,9 @@ export function setupIO(
       },
     },
     connect: async () => ({
-      async enrollPropose({ name }) {
+      async enrollPropose(input) {
+        proposalInputs.push(input)
+        const { name } = input
         proposals.push(name)
         return { requestId: name }
       },
@@ -135,5 +141,5 @@ export function setupIO(
       close() {},
     }),
   }
-  return { io, env, proposals, commands, output: () => output }
+  return { io, env, proposals, proposalInputs, commands, output: () => output }
 }
