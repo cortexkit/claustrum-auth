@@ -10,7 +10,7 @@ Quit OpenCode and Pi, then run:
 npx @cortexkit/opencode-claustrum-auth setup
 ```
 
-Setup detects the hosts and registers the appropriate package: `@cortexkit/opencode-claustrum-auth` for OpenCode or `@cortexkit/pi-claustrum-auth` for Pi. Approve enrollment and grant access in `ck auth`, then follow the printed provider activation commands. See [setup and activation](docs/setup.md) for a dry run, host selection and the separate grant step.
+Setup detects the hosts and registers the appropriate package: `@cortexkit/opencode-claustrum-auth` for OpenCode or `@cortexkit/pi-claustrum-auth` for Pi. Approve enrollment in `ck auth` to grant model-key read access in the same step on vaults that support it, then follow the printed provider activation commands. Older vaults need the manual grant command. See [setup and activation](docs/setup.md) for a dry run, host selection and the fallback grant step.
 
 ## What it does
 

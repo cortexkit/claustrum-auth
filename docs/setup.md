@@ -40,10 +40,19 @@ Vault mode is always on. `--claustrum` is accepted for compatibility;
 
 Approve each host's separate enrollment in `ck auth`. The apps show
 "Model API keys for OpenCode" or "Model API keys for Pi" when you approve the
-connection. Setup prints the exact
-approval and grant commands and the resolved state paths. Enrollment alone
-does not grant credential access: follow the printed grant command for the
-`llm-provider` category before activating a provider.
+connection. Setup requests read access to the `llm-provider` category with
+each enrollment, so approval grants that access in the same step on vaults
+that support requested grants. Setup checks access after approval and prints
+the resolved state paths and provider activation commands.
+
+Older vaults may approve enrollment without applying the requested grant. If
+access is missing or cannot be confirmed, follow setup's printed grant command
+before activating a provider:
+
+```sh
+ck auth grant --principal enrolled:claustrum-auth-opencode --selector-kind category --selector llm-provider --operation read
+ck auth grant --principal enrolled:claustrum-auth-pi --selector-kind category --selector llm-provider --operation read
+```
 
 Approve each additional instance of OpenCode or Pi with its own `--name`, and
 use that same name in the grant's `--principal enrolled:<name>`.

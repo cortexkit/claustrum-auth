@@ -16,7 +16,6 @@ import { printLine, processTerminal } from '@cortexkit/common-auth/auth-menu'
 import {
   connectClaustrumScopedClient,
   hostEnrollmentPaths,
-  readClaustrumEnrollmentStatus,
   VAULT_HOST_CONNECT_REFUSAL,
   type VaultGrantReach,
   vaultAuthority,
@@ -104,11 +103,17 @@ export async function runClaustrumSetup(
         opencode: {
           name: opencodeEnrollment,
           displayName: 'Model API keys for OpenCode',
+          requestedGrants: [
+            { selector: { category: 'llm-provider' }, operation: 'read' },
+          ],
           paths: { stateDir: states.opencode, host: 'opencode' },
         },
         pi: {
           name: piEnrollment,
           displayName: 'Model API keys for Pi',
+          requestedGrants: [
+            { selector: { category: 'llm-provider' }, operation: 'read' },
+          ],
           paths: { stateDir: '', host: 'pi' },
         },
       },
@@ -194,20 +199,9 @@ export async function runClaustrumSetup(
           await built.hub.dispose()
         }
       }
-      let grantName = enrollment.name
-      if (discover) {
-        const status = await readClaustrumEnrollmentStatus(
-          hostEnrollmentPaths(enrollment.paths),
-          enrollment.name,
-        )
-        if (status.state === 'approved' && status.approvedName)
-          grantName = status.approvedName
-      }
-      if (!reach || reach.grants === 0) {
-        if (discover && !reach)
-          print(
-            'Grant reach is unknown; if access has not already been granted, use the grant command below.',
-          )
+      // Enrollment prints confirmed access or the remedy. Dry runs skip enrollment.
+      if (!discover) {
+        const grantName = enrollment.name
         if (/^[a-z0-9][a-z0-9-]*$/u.test(grantName))
           print(
             `Grant command: ck auth grant --principal enrolled:${grantName} --selector-kind category --selector llm-provider --operation read`,

@@ -1,9 +1,18 @@
 import { afterEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import {
+  ClaustrumCredentialError,
   enrollmentAuthority,
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
@@ -298,7 +307,7 @@ test('test setup build enrolls once per host, discovers rows, prints provider ac
   )
 })
 
-test('setup proposes a person-facing display name for each vault host', async () => {
+test('setup proposes a person-facing display name and provider read grant for each vault host', async () => {
   const root = await profile()
   const h = setupIO(root)
   await runClaustrumSetup(
@@ -309,15 +318,149 @@ test('setup proposes a person-facing display name for each vault host', async ()
     {
       name: 'claustrum-auth-opencode',
       displayName: 'Model API keys for OpenCode',
+      requestedGrants: [
+        { selector: { category: 'llm-provider' }, operation: 'read' },
+      ],
       requestSecretHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     },
     {
       name: 'claustrum-auth-pi',
       displayName: 'Model API keys for Pi',
+      requestedGrants: [
+        { selector: { category: 'llm-provider' }, operation: 'read' },
+      ],
       requestSecretHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     },
   ])
 })
+
+test.each(['reachable', 'no-logins', 'unconfirmed', 'older-vault'] as const)(
+  'setup relies on enrollment access guidance without duplicate grant hints (%s)',
+  async (access) => {
+    const root = await profile()
+    const h = setupIO(root)
+    const connect = h.io.connect
+    if (!connect) throw new Error('missing enrollment transport')
+    let lists = 0
+    h.io.connect = async (options) => {
+      const client = await connect(options)
+      return {
+        ...client,
+        async enrollPropose(input) {
+          if (access === 'older-vault' && input.requestedGrants)
+            throw new ClaustrumCredentialError(
+              'invalid_params',
+              'permanent',
+              'gone',
+            )
+          return client.enrollPropose(input)
+        },
+        async listScoped() {
+          lists++
+          if (access === 'unconfirmed') throw new Error('vault unavailable')
+          return {
+            rows: access === 'reachable' ? [row('a')] : [],
+            view: 'setup',
+            grants: access === 'reachable' ? 1 : 0,
+            grantTuples: [],
+          }
+        },
+      }
+    }
+    await runClaustrumSetup(
+      ['--yes', '--host=opencode', '--host=pi', '--opencode=both'],
+      h.io,
+      {
+        table: fixtureEntries,
+        createCore: (options) =>
+          createTestCore({
+            ...options,
+            connect: async () => ({
+              async listScoped() {
+                return { rows: [], view: 'empty', grants: 0, grantTuples: [] }
+              },
+              async getScoped() {
+                throw new Error('setup must not read credential material')
+              },
+              async reportAuthFailureScoped() {},
+              close() {},
+            }),
+          }),
+      },
+    )
+    expect(lists).toBe(access === 'older-vault' ? 0 : 2)
+    const text = h.output()
+    if (access === 'reachable') {
+      expect(text).toContain('Confirmed read access')
+      expect(text).not.toContain('ck auth grant ')
+    } else {
+      expect(text).toContain(
+        access === 'older-vault'
+          ? 'This vault is too old to grant access with the approval'
+          : access === 'no-logins'
+            ? 'Approved, but no logins are reachable yet'
+            : 'Approved, but access could not be confirmed',
+      )
+      for (const host of ['opencode', 'pi'])
+        expect(text).toContain(
+          `ck auth grant --principal enrolled:claustrum-auth-${host} --selector-kind category --selector llm-provider --operation read`,
+        )
+      expect(text.match(/ck auth grant /gu)).toHaveLength(2)
+    }
+    expect(text).not.toContain('Grant command:')
+    expect(text).toContain('/claustrum use fixture-a')
+    expect(text).toContain(
+      'opencode auth login fixture-a --method claustrum-auth',
+    )
+  },
+)
+
+test.each([false, true])(
+  'setup confirms access on an already approved enrollment (without stored grants: %j)',
+  async (withoutStoredGrants) => {
+    const root = await profile()
+    const h = setupIO(root)
+    const args = ['--yes', '--enroll-only', '--host=opencode', '--host=pi']
+    await runClaustrumSetup(args, h.io)
+    if (withoutStoredGrants) {
+      const states = {
+        opencode: resolveOpencodeStateDir(h.env, root),
+        pi: path.join(h.env.PI_CODING_AGENT_DIR, 'claustrum-auth'),
+      }
+      for (const host of ['opencode', 'pi'] as const) {
+        const { statePath } = hostEnrollmentPaths({
+          stateDir: states[host],
+          host,
+        })
+        const state = JSON.parse(await readFile(statePath, 'utf8'))
+        delete state.requestedGrants
+        delete state.requestedGrantsStatus
+        await writeFile(statePath, JSON.stringify(state))
+      }
+    }
+    const connect = h.io.connect
+    if (!connect) throw new Error('missing enrollment transport')
+    let lists = 0
+    h.io.connect = async (options) => ({
+      ...(await connect(options)),
+      async listScoped() {
+        lists++
+        return { rows: [row('a')], view: 'setup', grants: 1, grantTuples: [] }
+      },
+    })
+    const start = h.output().length
+    await runClaustrumSetup(args, h.io)
+    expect(lists).toBe(2)
+    expect(h.proposals).toEqual([
+      'claustrum-auth-opencode',
+      'claustrum-auth-pi',
+    ])
+    const text = h.output().slice(start)
+    expect(text.match(/Already connected as /gu)).toHaveLength(2)
+    expect(text.match(/Confirmed read access /gu)).toHaveLength(2)
+    expect(text).not.toContain('ck auth grant ')
+  },
+)
 
 test('setup refuses local sign-in and delegates enroll-only without host registration or credential reads', async () => {
   const root = await profile()
