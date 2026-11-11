@@ -17,6 +17,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { freePort } from '../../packages/opencode/test/v2/e2e/host.ts'
 import { PiRpc } from '../../packages/pi/test/rpc.ts'
 import { packedRecords } from '../npm-pack-json.ts'
+import {
+  type BillingProbe,
+  type BillingReport,
+  billingChecks,
+  billingTable,
+  longPrompt,
+  type ProbeName,
+  reasoningPrompt,
+  storedCounts,
+} from './billing.ts'
 
 export const repo = fileURLToPath(new URL('../../', import.meta.url))
 export type Host = 'opencode1' | 'opencode2' | 'pi'
@@ -290,6 +300,33 @@ function reasoningRank(model: Model) {
   return reasoning || variants ? 2 : 1
 }
 
+function billingVariant(model: Model) {
+  const variants = Array.isArray(model.variants)
+    ? model.variants.map((v) => v.id)
+    : Object.keys(model.variants ?? {})
+  return ['low', 'minimal', 'medium', 'high', 'xhigh', 'max'].find((v) =>
+    variants.includes(v),
+  )
+}
+
+function reasoningModel(models: Model[], provider: string) {
+  const candidates = models.filter((model) => {
+    const capability = model.capabilities?.reasoning ?? model.reasoning
+    return (
+      reasoningRank(model) === 2 ||
+      capability === true ||
+      (typeof capability === 'object' && capability.supported) ||
+      billingVariant(model) !== undefined
+    )
+  })
+  try {
+    return cheapest(candidates, 'opencode2', provider)
+  } catch (error) {
+    if (error instanceof SmokeError && /^No/.test(error.code)) return undefined
+    throw error
+  }
+}
+
 export function smokeTokens(model: Model, host: Host, provider: string) {
   // A 16-token response can consist entirely of hidden reasoning. Meta's
   // captured variants lack an off control; Pi model overrides can also hide
@@ -363,21 +400,27 @@ export type Options = {
   hosts: Host[]
   provider: string
   dry: boolean
+  billing?: boolean
 }
 export function options(args: string[], env = process.env): Options {
-  let host = 'all',
+  let host = '',
     provider = 'all',
-    dry = false
+    dry = false,
+    billing = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === '--dry') dry = true
+    else if (arg === '--billing') billing = true
     else if (arg === '--host' && args[i + 1]) host = args[++i]
     else if (arg === '--provider' && args[i + 1]) provider = args[++i]
     else
       throw new SmokeError(
-        'Usage: --host opencode1|opencode2|pi|all --provider <id>|all [--dry]',
+        'Usage: --host opencode1|opencode2|pi|all --provider <id>|all [--dry] [--billing (OpenCode 2 only)]',
       )
   }
+  host ||= billing ? 'opencode2' : 'all'
+  if (billing && host !== 'opencode2')
+    throw new SmokeError('BillingRequiresOpenCode2')
   if (!env.LIVE_HOME || !env.CLAUSTRUM_SUBC_CONNECTION)
     throw new SmokeError('LIVE_HOME and CLAUSTRUM_SUBC_CONNECTION are required')
   if (host !== 'all' && !hosts.includes(host as Host))
@@ -395,6 +438,7 @@ export function options(args: string[], env = process.env): Options {
     hosts: selected,
     provider,
     dry,
+    ...(billing ? { billing } : {}),
   }
 }
 
@@ -448,11 +492,13 @@ function plan(o: Options) {
                     ? `${bin} auth login ${id} --method claustrum-auth --server <loopback-url>`
                     : `/claustrum use ${id}${host === 'pi' ? ' (RPC consent: true)' : ''}`,
                   `${host}/${p}: discover catalog, choose a text/tool model with reasoning off where available, cap output at 16 (1024 for reasoning), restart host, check ownership`,
-                  host === 'opencode2'
-                    ? `${bin} run --server <loopback-url> --format json --title 'Live smoke' --model ${id}/<cheapest-model> 'Reply with the single word OK.'`
-                    : host === 'pi'
-                      ? `RPC set_model ${id}/<cheapest-model>; prompt 'Reply with the single word OK.'`
-                      : `HTTP POST /session/<session-id>/message model=${id}/<cheapest-model> text='Reply with the single word OK.'`,
+                  o.billing
+                    ? `${host}/${p}: preload captures billing payloads in <LIVE_HOME>/.live-smoke/opencode2/billing.jsonl; two identical ~3000-token prompts in fresh sessions with the same cwd/default agent/model, then a short reasoning probe if catalog offers one; one send per probe; print report verdicts and stored host token totals`
+                    : host === 'opencode2'
+                      ? `${bin} run --server <loopback-url> --format json --title 'Live smoke' --model ${id}/<cheapest-model> 'Reply with the single word OK.'`
+                      : host === 'pi'
+                        ? `RPC set_model ${id}/<cheapest-model>; prompt 'Reply with the single word OK.'`
+                        : `HTTP POST /session/<session-id>/message model=${id}/<cheapest-model> text='Reply with the single word OK.'`,
                   host === 'opencode2'
                     ? `${bin} auth logout ${id} <activated-credential-id> --server <loopback-url>`
                     : `/claustrum accounts; /claustrum release ${id}`,
@@ -472,6 +518,7 @@ class Runner {
   readonly vaultIDs = new Map<string, string>()
   readonly children: ChildProcess[] = []
   readonly pending: Promise<unknown>[] = []
+  readonly billingProbes = new Map<string, BillingProbe[]>()
   constructor(
     readonly o: Options,
     readonly host: Host,
@@ -483,6 +530,16 @@ class Runner {
   }
   get cwd() {
     return path.join(this.o.home, '.live-smoke', this.host, 'project')
+  }
+  get billingFile() {
+    return path.join(this.o.home, '.live-smoke', this.host, 'billing.jsonl')
+  }
+  billingReports(): BillingReport[] {
+    if (!existsSync(this.billingFile)) return []
+    return readFileSync(this.billingFile, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as BillingReport)
   }
   start(argv: string[]) {
     const prefix = path.join(
@@ -686,7 +743,12 @@ interface Driver {
   menu(text: string): Promise<string>
   activate(id: string): Promise<string>
   models(id: string): Promise<Model[]>
-  turn(id: string, model: Model, followup?: boolean): Promise<string>
+  turn(
+    id: string,
+    model: Model,
+    followup?: boolean,
+    probe?: ProbeName,
+  ): Promise<string>
   release(id: string): Promise<string>
   stop(): Promise<void>
 }
@@ -943,7 +1005,7 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
       const catalog = (await api('GET', '/provider')) as { all: V1Provider[] }
       return v1Models(catalog.all.find((p) => p.id === id) ?? { id })
     },
-    async turn(id, model, followup = false) {
+    async turn(id, model, followup = false, probe) {
       if (readFileSync(ready, 'utf8') !== '1')
         throw new SmokeError('RetryGuardNotReady')
       // Bound physical sends, including output-limit continuations, not just
@@ -958,12 +1020,16 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
         budget,
         JSON.stringify({
           status: 0,
-          maxOutputTokens: smokeTokens(model, r.host, id),
+          maxOutputTokens:
+            probe === 'reasoning' ? 1024 : smokeTokens(model, r.host, id),
         }),
       )
       if (existsSync(`${budget}.spent`)) unlinkSync(`${budget}.spent`)
       if (v2) {
         if (followup && !turnSession) throw new SmokeError('MissingSessionID')
+        const offset = probe ? r.billingReports().length : 0
+        const variant =
+          probe === 'reasoning' ? billingVariant(model) : smokeVariant(model)
         const result = await r.run([
           bin,
           'run',
@@ -975,8 +1041,12 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
           '--format',
           'json',
           '--model',
-          `${id}/${model.id}${smokeVariant(model) ? `#${smokeVariant(model)}` : ''}`,
-          'Reply with the single word OK.',
+          `${id}/${model.id}${variant ? `#${variant}` : ''}`,
+          probe === 'reasoning'
+            ? reasoningPrompt
+            : probe
+              ? longPrompt
+              : 'Reply with the single word OK.',
         ])
         const events = result.text.split('\n').flatMap((line) => {
           try {
@@ -985,6 +1055,43 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
             return []
           }
         })
+        const sessions = [
+          ...new Set(
+            events
+              .map((e) => e.sessionID)
+              .filter((id): id is string => typeof id === 'string'),
+          ),
+        ]
+        const answer = events
+          .filter((e) => e.type === 'text')
+          .map((e) => e.part?.text ?? e.text ?? '')
+          .join('')
+        if (probe) {
+          const captured: BillingProbe = {
+            name: probe,
+            model: `${model.id}${variant ? `#${variant}` : ''}`,
+            session: sessions.length === 1 ? sessions[0] : '',
+            reports: r
+              .billingReports()
+              .slice(offset)
+              .filter((r) => r.provider === id),
+            reply: answer,
+            stored: [],
+          }
+          const probes = r.billingProbes.get(id) ?? []
+          probes.push(captured)
+          r.billingProbes.set(id, probes)
+          try {
+            if (!captured.session) throw new SmokeError('MissingSessionID')
+            captured.stored = storedCounts(
+              await api('GET', `/api/session/${captured.session}/message`),
+            )
+            if (!captured.stored.some((message) => message.tokens))
+              throw new SmokeError('StoredTokensMissing')
+          } catch (error) {
+            captured.captureError = failure(error)
+          }
+        }
         if (JSON.parse(readFileSync(budget, 'utf8')).exhausted)
           throw new SmokeError('RequestBudgetExhausted')
         if (result.code !== 0 || events.some((e) => e.type === 'error'))
@@ -993,24 +1100,12 @@ async function openCodeDriver(r: Runner): Promise<Driver> {
               ? 'Timeout'
               : errorClass(result.text + result.error),
           )
-        const sessions = [
-          ...new Set(
-            events
-              .map((e) => e.sessionID)
-              .filter((id): id is string => typeof id === 'string'),
-          ),
-        ]
         if (sessions.length !== 1)
           throw new SmokeError('MissingOrMixedSessionID')
         if (followup && sessions[0] !== turnSession)
           throw new SmokeError('FollowupSessionMismatch')
         turnSession = sessions[0]
-        return (
-          events
-            .filter((e) => e.type === 'text')
-            .map((e) => e.part?.text ?? e.text ?? '')
-            .join('') || 'NoAnswerText'
-        )
+        return answer || 'NoAnswerText'
       }
       if (!followup) turnSession = await session()
       // The guard allows one provider request using an exclusive marker file.
@@ -1121,6 +1216,8 @@ export type TestHooks = {
   onError?: (error: unknown) => void
 }
 export async function runSmoke(o: Options, hooks: TestHooks = {}) {
+  if (o.billing && (o.hosts.length !== 1 || o.hosts[0] !== 'opencode2'))
+    throw new SmokeError('BillingRequiresOpenCode2')
   o = { ...o, home: scratchHome(o.home) }
   const hostEnv = (host: Host) => ({
     ...environment(o.home, o.connection, host),
@@ -1146,7 +1243,7 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
     throw new SmokeError('MissingConnectionFile')
   const results: { host: Host; report: string; rows: Row[] }[] = []
   for (const host of o.hosts) {
-    const env = hostEnv(host)
+    const env: Record<string, string> = hostEnv(host)
     const work = path.join(o.home, '.live-smoke', host)
     for (const dir of [
       work,
@@ -1166,6 +1263,11 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
     let driver: Driver | undefined
     const baseline = stamp(o.home)
     try {
+      if (o.billing) {
+        confined(o.home, r.billingFile)
+        writeFileSync(r.billingFile, '', { mode: 0o600 })
+        env.CLAUSTRUM_AUTH_LIVE_BILLING = r.billingFile
+      }
       const initialized = await r.run(['git', 'init', '-q', r.cwd])
       if (initialized.code !== 0) throw new SmokeError('ScratchGitInitFailed')
       const pkg = await install(r)
@@ -1244,6 +1346,7 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
         writeFileSync(
           path.join(guard, 'server.js'),
           `
+          ${o.billing ? `import ${JSON.stringify(pathToFileURL(path.join(repo, 'scripts/live-smoke/billing-preload.mjs')).href)}` : ''}
           import original from ${JSON.stringify(original)}
           import {writeFileSync,openSync,closeSync} from 'node:fs'
           export default {...original,setup:async(ctx,options)=>{
@@ -1348,18 +1451,38 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
           const available = await driver.models(id)
           const models = hooks.models?.(available) ?? available
           const model = cheapest(models, host, p)
-          capModels(r, id, p, models)
+          const reasoning = o.billing ? reasoningModel(models, p) : undefined
+          capModels(r, id, p, models, reasoning)
           await driver.stop()
           driver =
             host === 'pi' ? await piDriver(r, plugin) : await openCodeDriver(r)
-          const answer = await driver.turn(id, model)
+          const answer = await driver.turn(
+            id,
+            model,
+            false,
+            o.billing ? 'long-1' : undefined,
+          )
           if (!answer.trim() || answer === 'NoAnswerText')
             throw new SmokeError('NoAnswerText')
           row.turn = `${preview(answer)} (model: ${model.id})`
-          if (p === 'cline-pass')
+          if (o.billing) {
+            // Fresh sessions avoid doubling the prompt with conversation history.
+            // Reuse the host, cwd, default agent and model to minimize changes
+            // to the system prefix; stored token totals expose size differences.
+            await driver.turn(id, model, false, 'long-2')
+            if (reasoning) await driver.turn(id, reasoning, false, 'reasoning')
+            const probes = r.billingProbes.get(id) ?? []
+            const checks = billingChecks(probes)
+            row.extras = checks.map((c) => `${c.verdict} ${c.check}`).join('; ')
+            if (probes.some((probe) => !probe.reports.length))
+              row.extras += '; FAIL billing report missing for executed probe'
+            if (probes.some((probe) => probe.captureError))
+              row.extras += '; FAIL stored token capture'
+          }
+          if (!o.billing && p === 'cline-pass')
             row.extras =
               'credential-id classified; refusals clear (verify vault row has no provider id)'
-          if (p === 'meta')
+          if (!o.billing && p === 'meta')
             row.extras =
               'one turn only; insufficient-validity is a vault defect; no 401 retry'
           const accounts = await driver.menu('accounts')
@@ -1444,7 +1567,36 @@ export async function runSmoke(o: Options, hooks: TestHooks = {}) {
       path.dirname(o.home),
       `results-${host}-${new Date().toISOString().replace(/[:.]/g, '-')}.md`,
     )
-    const markdown = table(host, rows)
+    const reports = o.billing ? r.billingReports() : []
+    const missingUsage = [
+      ...new Set(
+        reports
+          .filter(
+            (r) =>
+              r.outcome === 'completed' &&
+              (!r.usage ||
+                r.usage.input === undefined ||
+                r.usage.output === undefined),
+          )
+          .map((r) => r.provider),
+      ),
+    ]
+    const markdown =
+      table(host, rows) +
+      (o.billing
+        ? rows
+            .map((row) => {
+              const id = providerID(host, row.provider)
+              return billingTable(
+                row.provider,
+                r.billingProbes.get(id) ?? [],
+                reports.filter((r) => r.provider === id),
+                safe,
+              )
+            })
+            .join('') +
+          `\nProviders with completed replies missing usage/input/output: ${missingUsage.length ? missingUsage.map(safe).join(', ') : 'none'}\n`
+        : '')
     writeFileSync(report, markdown, { mode: 0o600 })
     console.log(markdown)
     results.push({ host, report, rows })
@@ -1467,7 +1619,13 @@ export async function main() {
 }
 if (import.meta.main) await main()
 
-function capModels(r: Runner, id: string, provider: string, models: Model[]) {
+function capModels(
+  r: Runner,
+  id: string,
+  provider: string,
+  models: Model[],
+  reasoning?: Model,
+) {
   const file =
     r.host === 'pi'
       ? path.join(r.env.PI_CODING_AGENT_DIR, 'models.json')
@@ -1483,7 +1641,13 @@ function capModels(r: Runner, id: string, provider: string, models: Model[]) {
     for (const model of models)
       config[key][id].models[model.id] = {
         ...config[key][id].models[model.id],
-        limit: { ...model.limit, output: smokeTokens(model, r.host, provider) },
+        limit: {
+          ...model.limit,
+          output:
+            reasoning?.id === model.id
+              ? 1024
+              : smokeTokens(model, r.host, provider),
+        },
       }
   }
   writeFileSync(file, JSON.stringify(config))

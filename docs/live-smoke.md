@@ -16,7 +16,7 @@ The entry and README there are local, git-ignored operator artifacts; the
 shared driver is tracked at `scripts/live-smoke/run.ts` and can also be run
 directly with the same arguments.
 
-For each served row with an eligible catalog model, the headless driver attempts
+Without `--billing`, for each served row with an eligible catalog model, the headless driver attempts
 at most one provider request, with a 16-token output cap for non-reasoning
 models. Models without a reasoning-off control get 1024 tokens so hidden
 reasoning does not consume the entire answer budget. Meta always gets that
@@ -42,6 +42,76 @@ send. If the first response is still truncated, `RequestBudgetExhausted` is a
 driver-budget failure, not an account refusal; it is not retried. The second
 xAI turn and Anthropic refusal probes below remain manual checks, not extra
 headless requests. Raw API captures keep their sequence across host restarts.
+
+## Billing semantics probe (OpenCode 2 only)
+
+Use the already-enrolled **scratch** home and test enrollment, never a personal
+OpenCode profile. Preview first, then remove `--dry` to spend real provider tokens:
+
+```sh
+LIVE_HOME=<enrolled-scratch-home> CLAUSTRUM_SUBC_CONNECTION=<test-connection.json> \
+  bun scripts/live-smoke/run.ts --billing --provider deepseek --dry
+# --provider all checks the runner's usual OpenCode 2 provider matrix.
+```
+
+`--billing` selects OpenCode 2 by default; an explicit `--host` must be
+`opencode2`. It does not enable live smoke in CI. Activation, logout of only the
+scratch credential activated by the runner, scratch isolation and the leak scan
+remain in place. The server imports
+a preload before plugin setup that installs `Symbol.for('cortexkit.routing')`
+and appends **only billing report payloads** to
+`$LIVE_HOME/.live-smoke/opencode2/billing.jsonl` (reset on each run). No headers,
+requests or vault replies are recorded by the preload. The capture is inside
+the existing scratch-home leak scan.
+
+For each served provider with an eligible text/tool model, the mode sends the
+same fixed roughly 3,000-token prose prompt twice, ending in
+“Reply with the single word OK”. Both use the same model/variant, default agent,
+host and working directory. Each uses a **fresh session**: retaining the first
+turn in conversation history would double the second prompt and invalidate the
+cache comparison. Per-session system-prompt
+differences are not observable from billing reports; compare the printed stored
+agent and host context totals before interpreting a mismatch. If the catalog
+advertises a reasoning-capable model, a third fresh session sends a short
+arithmetic prompt with reasoning enabled at a low non-off variant when offered
+and a 1,024-token output cap. No model ids are invented, retries and automatic
+continuations remain blocked, and no request fields are added to obtain usage.
+
+The per-provider tables print every report's `outcome`, `chargeBasis`, `cache`
+and usage, then verdicts from the reports (plus visible reply length for the
+reasoning heuristic):
+
+- **Prompt includes cache:** with a positive second-turn `cache_read`, compare
+  first input with second input + cache read + cache write within 2%. Reports
+  already subtract cache; if the first turn also hits/writes cache, restore its
+  cache counts before comparing too. A second total near first minus cache read
+  suggests the table wrongly subtracted an already cache-exclusive prompt count.
+  No hit, missing inputs, or no single completed primary report is **UNTESTED**.
+- **Reasoning in output:** **FAIL** if reasoning exceeds output; otherwise
+  **PASS** only if output minus reasoning is between half and twice visible
+  reply characters/4. Missing reasoning is **UNTESTED**. This short-reply estimate
+  is deliberately heuristic, not a tokenizer or a provider-contract proof.
+- **Usage present:** every completed report must contain measured input and
+  output (including explicit zero). Missing fields are **FAIL**; no completed
+  reports is **UNTESTED**. The summary lists providers with missing usage.
+
+Beside each turn's report counts, the mode prints OpenCode's stored assistant
+token counters and context size (stored input + cache.read + cache.write),
+session id and model/variant. These host-normalized totals are for inspection,
+**never verdict inputs**. Missing reports or unavailable stored tokens are
+also flagged in the ordinary smoke summary. Tables go to stdout and the usual
+`results-opencode2-<timestamp>.md` next to the scratch home.
+
+**Rough cost per provider:** two long prompts contribute about **6,000 user
+input tokens**, plus the host's system/tool prefix on each of two or three
+requests; the reasoning prompt itself is short. Ordinary long replies have a
+16-token cap, or 1,024 when the selected model needs reasoning room or is also
+selected for the reasoning probe. With the
+optional reasoning probe the total output ceiling is therefore usually
+**1,056 tokens**, at worst **3,072**. Cache hits can reduce billed input, not
+request count. Dollar cost depends on the catalog-selected models/provider
+plan; all-provider mode multiplies this budget by the served providers. There
+are at most three physical sends per provider, not three successful retries.
 
 ## 0. Once, before the first provider
 
