@@ -10,8 +10,10 @@ and the process-global
 not wrap responses, acquire readers, or look up usage semantics. Existing
 credential-redaction and host lifecycle wrappers still apply.
 
-Each physical send has its own random UUID, including retries, account reroutes
-and same-origin redirect re-dispatches. HTTP reports settle when the body ends,
+Each reported model-call attempt has its own random UUID, including retries and
+account reroutes. Same-origin redirect hops that core follows are not model
+calls and produce no report; only the terminal send that core returns to the
+host, or a send that ends in an error, reports. HTTP reports settle when the body ends,
 errors or is cancelled, not when headers arrive. Successful Pi sends wait for
 pi-ai's final assistant message to supply the stored `responseId` and outcome;
 their usage comes from the provider reply through the same table as OpenCode 2,
@@ -23,12 +25,16 @@ abandoned/failed attempt. The socket can remain open between sends.
 Reports carry the receipt's exact credential id and, if present, account identity.
 `provider` is the **host catalog id**, not the provider id in the vault's fleet
 roster: Kimi is
-`kimi-code-plan-global` on OpenCode 2 and `kimi-coding` on Pi. The model comes
+`kimi-code-plan-global` on OpenCode 2 and `kimi-coding` on Pi. **Pricing gap:**
+Pi's `kimi-coding` id does not match the pricing catalog's
+`kimi-code-plan-global`; that catalog mapping must be resolved on the pricing
+side, without changing the host id in the report. The model comes
 from the hook's `modelID` or Pi's `model.id`; no request body is parsed to find it.
-A different reply model is recorded in `usageByModel`, without changing the sent
-model. OpenCode's `kind` maps directly to `primary`, `title`, `compaction`, or
+Reply model names are ignored: providers often echo aliases, prefixes or dated
+versions of the sent model. The plugin never sends `usageByModel`, because those
+names are not a reliable reroute signal and may lack pricing catalog coverage. OpenCode's `kind` maps directly to `primary`, `title`, `compaction`, or
 `generate`; Pi uses `primary`. Host-provided retry attempt numbers are retained
-when available; Pi numbers physical sends within its stream.
+when available; Pi numbers reported model-call attempts within its stream.
 
 Outcomes follow the openai-auth convention: a provider error or non-2xx status
 is `failed`; a completed reply whose body ended is `completed`; otherwise a
@@ -46,7 +52,11 @@ at most 1 MiB; larger replies still report, without parsed usage.
 The `billing` rows in `packages/core/src/providers.ts` are the extraction and
 semantics table for both hosts. Field paths below are relative to `usage` unless
 specified otherwise. Missing counts stay absent; zero is retained only when
-reported. When prompt counts include cache but the reply supplies no cache
+reported. Each stream retains the latest raw value of every reported counter;
+cache subtraction, flooring at zero and write-lifetime summation happen once
+when the report is built, so counts may arrive in different chunks. OpenCode's
+cache-exclusive token namespace remains separate from generic prompt totals.
+When prompt counts include cache but the reply supplies no cache
 counter, `input` is the reported prompt count and **may include cache hits**.
 The plugin never changes `stream_options`, `perf_metrics_in_response`, or any
 other request field to obtain accounting.

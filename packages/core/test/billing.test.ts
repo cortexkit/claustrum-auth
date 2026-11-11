@@ -5,7 +5,9 @@ import {
   observeBillingResponse,
 } from '../src/billing.ts'
 import { supportedProviders } from '../src/providers.ts'
+import { createFetch, fixtureEntries } from '../test-entry.ts'
 import { captureBilling } from './billing-fixtures.ts'
+import { bearer, harness, placeholder } from './fakes.ts'
 
 test('disabled billing observer preserves response identity without taking a reader or parsing JSON', () => {
   const response = new Response('not JSON')
@@ -137,3 +139,111 @@ test('TypeSafe non-streaming JSON reports at body end and ignores undocumented c
     cache: { warming: { on: false, stop_reason: 'unsupported' } },
   })
 })
+
+function streamAttempt(service: string) {
+  const entry = supportedProviders.find((row) => row.service === service)
+  if (!entry) throw new Error('missing provider')
+  return new BillingAttempt(
+    entry,
+    service,
+    'session',
+    'primary',
+    'sent-model',
+    {
+      credentialId: `apikey:${service}`,
+      credentialType: 'api_key',
+      accountIdentitySource: 'none',
+      accessToken: 'secret',
+      recordVersion: 1,
+      expiresAtMs: null,
+    },
+  )
+}
+
+test('split prompt and cached counts derive uncached input once at report time', () => {
+  const { reports } = captureBilling()
+  const record = streamAttempt('cerebras')
+  record.event({ usage: { prompt_tokens: 100, completion_tokens: 20 } })
+  record.event({ usage: { prompt_tokens_details: { cached_tokens: 40 } } })
+  record.done()
+  record.bodyEnd(true, 200)
+  expect(reports).toHaveLength(1)
+  expect(reports[0]?.usage).toEqual({
+    input: 60,
+    output: 20,
+    cache_read: 40,
+    reasoning_included_in_output: true,
+  })
+})
+
+test('split OpenCode write lifetimes are summed from their latest raw counts', () => {
+  const { reports } = captureBilling()
+  const record = streamAttempt('opencode-go')
+  record.event({
+    usage: { opencode: { tokens: { input: 10, cache_write_5m: 3 } } },
+  })
+  record.event({
+    usage: { opencode: { tokens: { cache_write_1h: 4, output: 8 } } },
+  })
+  record.done()
+  record.bodyEnd(true, 200)
+  expect(reports).toHaveLength(1)
+  expect(reports[0]?.usage).toEqual({
+    input: 10,
+    output: 8,
+    cache_write: 7,
+    cache_write_5m: 3,
+    cache_write_1h: 4,
+    reasoning_included_in_output: true,
+  })
+})
+
+test.each(['terminal-redirect', 'transport-error', 'redirect-limit'] as const)(
+  'core still reports a send ending in %s',
+  async (mode) => {
+    const { reports } = captureBilling()
+    const h = await harness()
+    const entry = fixtureEntries[0]
+    if (!entry) throw new Error('missing fixture')
+    const fetch = createFetch({
+      entry,
+      placeholder,
+      consumer: h.consumer,
+      billing: (receipt) =>
+        new BillingAttempt(
+          entry,
+          'fixture-a',
+          'session',
+          'primary',
+          'sent-model',
+          receipt,
+        ),
+      fetch: async () => {
+        if (mode === 'transport-error') throw new Error('transport failed')
+        return new Response('redirect', {
+          status: 307,
+          headers: {
+            location:
+              mode === 'terminal-redirect'
+                ? 'https://other.invalid/next'
+                : '/again',
+          },
+        })
+      },
+    })
+    const reply = fetch('https://fixture.invalid/start', { headers: bearer })
+    if (mode === 'terminal-redirect') await (await reply).text()
+    else
+      await expect(reply).rejects.toThrow(
+        mode === 'transport-error' ? 'transport failed' : 'redirect-limit',
+      )
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toMatchObject({
+      outcome: 'failed',
+      model: 'sent-model',
+      ...(mode !== 'transport-error' ? { status: 307 } : {}),
+    })
+    if (mode === 'transport-error')
+      expect(reports[0]).not.toHaveProperty('status')
+  },
+)

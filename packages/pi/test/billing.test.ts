@@ -176,7 +176,6 @@ for (const provider of ['deepseek', 'cerebras'] as const) {
         provider_response_id: message.responseId,
         ...(provider === 'deepseek' ? { charge_basis: 'metered_api' } : {}),
         usage: expectedUsage,
-        usage_by_model: [{ model_used: 'served-model', usage: expectedUsage }],
         cache: { implicit: true },
       },
     ])
@@ -203,17 +202,15 @@ test('Pi reroute bills both physical sends with different UUIDs and attempts', a
   expect(reports[0]?.attempt_id).not.toBe(reports[1]?.attempt_id)
 })
 
-test('Pi same-origin redirect counts as a separate receipt-bound physical send', async () => {
+test('Pi followed same-origin redirect reports only the completed model call', async () => {
   const { reports } = captureBilling()
   await turn('deepseek', false, false, true)
-  expect(
-    reports.map((report) => [report.attempt, report.status, report.outcome]),
-  ).toEqual([
-    [1, 307, 'failed'],
-    [2, 200, 'completed'],
-  ])
-  expect(reports[0]?.attempt_id).not.toBe(reports[1]?.attempt_id)
-  expect(reports[0]).not.toHaveProperty('usage')
+  expect(reports).toHaveLength(1)
+  expect(reports[0]).toMatchObject({
+    status: 200,
+    outcome: 'completed',
+    usage: expectedUsage,
+  })
 })
 
 test('Pi without an accessor never looks up usage semantics for a served request', async () => {

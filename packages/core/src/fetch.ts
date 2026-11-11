@@ -103,6 +103,9 @@ export function createFetch(options: FetchOptions): CoreFetch {
     const tried = new Set<string>()
     const rejected = new Set<string>()
     const secrets: string[] = []
+    let redirectBilling:
+      | { receipt: ClaustrumScopedAttempt; status: number }
+      | undefined
     let pending:
       | {
           response: Response
@@ -260,14 +263,24 @@ export function createFetch(options: FetchOptions): CoreFetch {
                 credentials: template.credentials,
                 cache: template.cache,
               })
-              const billing = options.billing?.(receipt)
+              let billing: BillingAttempt | undefined
               try {
-                return observeBillingResponse(
-                  billing,
-                  await options.fetch(outbound),
-                )
+                const reply = await options.fetch(outbound)
+                if (
+                  options.billing &&
+                  [301, 302, 303, 307, 308].includes(reply.status) &&
+                  reply.headers.has('location')
+                ) {
+                  // A followed redirect is a routing hop, not a billable model
+                  // call. Wait until the redirect checks decide to return it.
+                  redirectBilling = { receipt, status: reply.status }
+                  return reply
+                }
+                billing = options.billing?.(receipt)
+                return observeBillingResponse(billing, reply)
               } catch (error) {
-                billing?.end(false, false)
+                const failedBilling = billing ?? options.billing?.(receipt)
+                failedBilling?.end(false, false)
                 throw error
               }
             },
@@ -293,6 +306,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
             await response.body?.cancel().catch(() => {})
             throw new ClaustrumAuthError('redirect-limit')
           }
+          redirectBilling = undefined
           await response.body?.cancel().catch(() => {})
           if (
             (response.status === 303 && method !== 'HEAD') ||
@@ -302,6 +316,11 @@ export function createFetch(options: FetchOptions): CoreFetch {
             bytes = undefined
           }
           target = next
+        }
+        if (redirectBilling) {
+          const billing = options.billing?.(redirectBilling.receipt)
+          redirectBilling = undefined
+          response = observeBillingResponse(billing, response)
         }
         const parsed = await limitFromReply({
           account: observation?.binding.account ?? initial.account,
@@ -346,6 +365,10 @@ export function createFetch(options: FetchOptions): CoreFetch {
         }
       }
     } catch (error) {
+      if (redirectBilling)
+        options
+          .billing?.(redirectBilling.receipt)
+          ?.end(false, false, redirectBilling.status)
       await pending?.response.body?.cancel().catch(() => {})
       throw redactError(error, secrets)
     }

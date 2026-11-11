@@ -75,7 +75,6 @@ for (const provider of ['deepseek', 'cerebras'] as const) {
         provider_response_id: 'reply-1',
         ...(provider === 'deepseek' ? { charge_basis: 'metered_api' } : {}),
         usage: expectedUsage,
-        usage_by_model: [{ model_used: 'served-model', usage: expectedUsage }],
         cache: {
           implicit: true,
           warming: { on: false, stop_reason: 'unsupported' },
@@ -87,6 +86,29 @@ for (const provider of ['deepseek', 'cerebras'] as const) {
     )
   })
 }
+
+test('a reply model alias keeps one report at the sent model without usageByModel', async () => {
+  const { reports } = captureBilling()
+  const run = await setup('deepseek')
+  await run.send()
+  const response = new Response(
+    `${chatChunks('deepseek')
+      .map(
+        (chunk) =>
+          `data: ${JSON.stringify({ ...chunk, model: 'deepseek/deepseek-chat-2026-01-01' })}\n\n`,
+      )
+      .join('')}data: [DONE]\n\n`,
+    { headers: { 'content-type': 'text/event-stream' } },
+  )
+  await (await run.response(response)).text()
+  expect(reports).toHaveLength(1)
+  expect(reports[0]).toMatchObject({
+    model: 'sent-model',
+    usage: expectedUsage,
+  })
+  expect(reports[0]).not.toHaveProperty('usage_by_model')
+  expect(reports[0]).not.toHaveProperty('usageByModel')
+})
 
 test('without an accessor a served host request never looks up billing semantics', async () => {
   Reflect.deleteProperty(globalThis, Symbol.for('cortexkit.routing'))

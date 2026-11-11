@@ -30,11 +30,16 @@ function count(
   return undefined
 }
 
-/** Read only documented fields; absent counters must not become measured zeroes. */
-export function billingUsage(
+interface RawBillingUsage {
+  counts: BillingUsage
+  opencode: boolean
+}
+
+/** Retain measured totals without deriving values that later chunks can change. */
+function rawBillingUsage(
   entry: ProviderEntry,
   value: unknown,
-): BillingUsage | undefined {
+): RawBillingUsage | undefined {
   const semantics = entry.billing
   if (!semantics) return undefined
   const usage: BillingUsage = {}
@@ -42,7 +47,8 @@ export function billingUsage(
     object(value) && object(value.usage) && object(value.usage.opencode)
       ? value.usage.opencode.tokens
       : undefined
-  if (semantics.opencodeTokens && object(tokens)) {
+  const opencode = !!semantics.opencodeTokens && object(tokens)
+  if (opencode) {
     for (const [field, path] of [
       ['input', 'input'],
       ['output', 'output'],
@@ -54,10 +60,6 @@ export function billingUsage(
       const measured = count(tokens, [path])
       if (measured !== undefined) usage[field] = measured
     }
-    if (usage.cacheWrite5m !== undefined || usage.cacheWrite1h !== undefined)
-      usage.cacheWrite = (usage.cacheWrite5m ?? 0) + (usage.cacheWrite1h ?? 0)
-    if (!Object.keys(usage).length) return undefined
-    usage.reasoningIncludedInOutput = true
   } else {
     for (const field of [
       'input',
@@ -69,16 +71,40 @@ export function billingUsage(
       const measured = count(value, semantics[field])
       if (measured !== undefined) usage[field] = measured
     }
-    if (!Object.keys(usage).length) return undefined
-    if (usage.input !== undefined && semantics.promptIncludesCache)
+  }
+  return Object.keys(usage).length ? { counts: usage, opencode } : undefined
+}
+
+function finalizedUsage(
+  entry: ProviderEntry,
+  counts: BillingUsage | undefined,
+  opencode: boolean,
+): BillingUsage | undefined {
+  if (!counts) return undefined
+  const usage = { ...counts }
+  if (opencode) {
+    if (usage.cacheWrite5m !== undefined || usage.cacheWrite1h !== undefined)
+      usage.cacheWrite = (usage.cacheWrite5m ?? 0) + (usage.cacheWrite1h ?? 0)
+    usage.reasoningIncludedInOutput = true
+  } else {
+    if (usage.input !== undefined && entry.billing?.promptIncludesCache)
       usage.input = Math.max(
         0,
         usage.input - (usage.cacheRead ?? 0) - (usage.cacheWrite ?? 0),
       )
-    if (semantics.reasoningIncludedInOutput !== undefined)
-      usage.reasoningIncludedInOutput = semantics.reasoningIncludedInOutput
+    if (entry.billing?.reasoningIncludedInOutput !== undefined)
+      usage.reasoningIncludedInOutput = entry.billing.reasoningIncludedInOutput
   }
   return usage
+}
+
+/** Read only documented fields; absent counters must not become measured zeroes. */
+export function billingUsage(
+  entry: ProviderEntry,
+  value: unknown,
+): BillingUsage | undefined {
+  const raw = rawBillingUsage(entry, value)
+  return raw ? finalizedUsage(entry, raw.counts, raw.opencode) : undefined
 }
 
 /** The accessor can be installed or released after the plugin starts. */
@@ -101,8 +127,8 @@ export class BillingAttempt {
   private failed = false
   private outputStarted = false
   private responseId?: string
-  private usage?: BillingUsage
-  private modelUsed?: string
+  private rawUsage?: BillingUsage
+  private rawOpenCodeUsage?: BillingUsage
   private status?: number
   private ended = false
 
@@ -147,10 +173,13 @@ export class BillingAttempt {
     const response = object(value.response) ? value.response : value
     if (!this.pi && typeof response.id === 'string')
       this.responseId = response.id
-    const usage = billingUsage(this.entry, response)
-    if (usage) {
-      this.usage = { ...this.usage, ...usage }
-      if (typeof response.model === 'string') this.modelUsed = response.model
+    const raw = rawBillingUsage(this.entry, response)
+    if (raw?.opencode) {
+      // OpenCode's own input excludes cache already; do not mix it with
+      // generic prompt totals, even if the namespaces arrive in different chunks.
+      this.rawOpenCodeUsage = { ...this.rawOpenCodeUsage, ...raw.counts }
+    } else if (raw) {
+      this.rawUsage = { ...this.rawUsage, ...raw.counts }
     }
   }
 
@@ -198,6 +227,11 @@ export class BillingAttempt {
     this.reported = true
     const warming = sessionCachePolicy(this.sessionId)?.keep_warm
     const implicit = this.entry.billing?.implicitCache
+    const usage = finalizedUsage(
+      this.entry,
+      this.rawOpenCodeUsage ?? this.rawUsage,
+      this.rawOpenCodeUsage !== undefined,
+    )
     reportRouting({
       sessionId: this.sessionId,
       kind: 'billing',
@@ -223,10 +257,7 @@ export class BillingAttempt {
       ...(this.entry.chargeBasis
         ? { chargeBasis: this.entry.chargeBasis }
         : {}),
-      ...(this.usage ? { usage: this.usage } : {}),
-      ...(this.usage && this.modelUsed && this.modelUsed !== this.model
-        ? { usageByModel: [{ modelUsed: this.modelUsed, usage: this.usage }] }
-        : {}),
+      ...(usage ? { usage } : {}),
       ...(implicit || (warming && warming !== 'off')
         ? {
             cache: {
