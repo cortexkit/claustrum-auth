@@ -109,14 +109,31 @@ export function billingChecks(
       }
     else {
       const visible = usage.output - usage.reasoning
-      const estimate = (reasoningProbe?.reply.length ?? 0) / 4
-      reasoning = {
-        check: reasoning.check,
-        verdict:
-          estimate > 0 && visible >= estimate / 2 && visible <= estimate * 2
-            ? 'PASS'
-            : 'FAIL',
-        reason: `output-reasoning=${visible}; visible reply estimate=${estimate.toFixed(2)} tokens (chars/4, factor-of-two tolerance)`,
+      const storedOutputs = reasoningProbe?.stored
+        .map(({ tokens }) => tokens?.output)
+        .filter(count)
+      const storedOutput =
+        storedOutputs?.length === 1 ? storedOutputs[0] : undefined
+      // OpenCode stores visible output separately from reasoning. Prefer its
+      // measured count to a character estimate, especially for short replies.
+      if (count(storedOutput))
+        reasoning = {
+          check: reasoning.check,
+          verdict: Math.abs(visible - storedOutput) <= 1 ? 'PASS' : 'FAIL',
+          reason: `output-reasoning=${visible}; OpenCode stored visible output=${storedOutput} (±1 token tolerance)`,
+        }
+      else {
+        const estimate = (reasoningProbe?.reply.length ?? 0) / 4
+        reasoning = {
+          check: reasoning.check,
+          verdict:
+            estimate > 0 &&
+            ((visible >= estimate / 2 && visible <= estimate * 2) ||
+              Math.abs(visible - estimate) <= 8)
+              ? 'PASS'
+              : 'FAIL',
+          reason: `output-reasoning=${visible}; visible reply estimate=${estimate.toFixed(2)} tokens (chars/4, factor-of-two or ±8 token tolerance; stored visible output unavailable)`,
+        }
       }
     }
   }
@@ -187,5 +204,5 @@ export function billingTable(
         `| ${[String(at + 1), r.request_kind, r.model, r.outcome, r.charge_basis ?? '(absent)', JSON.stringify(r.cache ?? null), JSON.stringify(r.usage ?? null)].map(cell).join(' | ')} |`,
     )
     .join('\n')
-  return `\n## Billing: ${cell(provider)}\n\n| check | verdict | reason |\n| --- | --- | --- |\n${rows}\n\nFresh sessions, same cwd/default agent; no conversation history reused. Stored host totals are diagnostic only, not verdict inputs. Host context = stored input + cache.read + cache.write; per-session system-prompt differences are not observable from billing reports.\n\n| turn | model/variant | session | report usage | OpenCode stored agent/tokens | host context tokens | capture error |\n| --- | --- | --- | --- | --- | --- | --- |\n${totals}\n\n| report | request kind | model | outcome | chargeBasis | cache | usage |\n| --- | --- | --- | --- | --- | --- | --- |\n${raw}\n`
+  return `\n## Billing: ${cell(provider)}\n\n| check | verdict | reason |\n| --- | --- | --- |\n${rows}\n\nFresh sessions, same cwd/default agent; no conversation history reused. Stored visible output is used only for the reasoning verdict; other host totals are diagnostic. Host context = stored input + cache.read + cache.write; per-session system-prompt differences are not observable from billing reports.\n\n| turn | model/variant | session | report usage | OpenCode stored agent/tokens | host context tokens | capture error |\n| --- | --- | --- | --- | --- | --- | --- |\n${totals}\n\n| report | request kind | model | outcome | chargeBasis | cache | usage |\n| --- | --- | --- | --- | --- | --- | --- |\n${raw}\n`
 }

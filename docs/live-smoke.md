@@ -78,8 +78,8 @@ and a 1,024-token output cap. No model ids are invented, retries and automatic
 continuations remain blocked, and no request fields are added to obtain usage.
 
 The per-provider tables print every report's `outcome`, `chargeBasis`, `cache`
-and usage, then verdicts from the reports (plus visible reply length for the
-reasoning heuristic):
+and usage, then verdicts from the reports (plus OpenCode's stored visible output
+or visible reply length for the reasoning check):
 
 - **Prompt includes cache:** with a positive second-turn `cache_read`, compare
   first input with second input + cache read + cache write within 2%. Reports
@@ -88,17 +88,22 @@ reasoning heuristic):
   suggests the table wrongly subtracted an already cache-exclusive prompt count.
   No hit, missing inputs, or no single completed primary report is **UNTESTED**.
 - **Reasoning in output:** **FAIL** if reasoning exceeds output; otherwise
-  **PASS** only if output minus reasoning is between half and twice visible
-  reply characters/4. Missing reasoning is **UNTESTED**. This short-reply estimate
-  is deliberately heuristic, not a tokenizer or a provider-contract proof.
+  compare output minus reasoning with OpenCode's stored visible output within
+  **±1 token** when a single stored assistant output count is available. OpenCode's
+  AI SDK splits reasoning out of that stored output. Otherwise, **PASS** if the
+  difference is between half and twice visible reply characters/4, or within
+  **±8 tokens** of that estimate to avoid short-reply rounding failures. An empty
+  reply cannot pass the character fallback. Missing reasoning is **UNTESTED**.
+  The character fallback is heuristic, not a tokenizer or provider-contract proof.
 - **Usage present:** every completed report must contain measured input and
   output (including explicit zero). Missing fields are **FAIL**; no completed
   reports is **UNTESTED**. The summary lists providers with missing usage.
 
 Beside each turn's report counts, the mode prints OpenCode's stored assistant
 token counters and context size (stored input + cache.read + cache.write),
-session id and model/variant. These host-normalized totals are for inspection,
-**never verdict inputs**. Missing reports or unavailable stored tokens are
+session id and model/variant. Stored visible output is used **only for the
+reasoning verdict**; all other host-normalized totals remain diagnostic.
+Missing reports or unavailable stored tokens are
 also flagged in the ordinary smoke summary. Tables go to stdout and the usual
 `results-opencode2-<timestamp>.md` next to the scratch home.
 

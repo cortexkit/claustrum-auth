@@ -103,6 +103,21 @@ describe('billing report checks', () => {
     ).toBe('PASS')
   })
 
+  for (const [provider, output, reasoning, storedOutput] of [
+    ['DeepSeek', 43, 41, 2],
+    ['Kimi', 53, 39, 14],
+    ['Cerebras', 133, 128, 5],
+  ] as const) {
+    test(`live ${provider} reasoning row uses stored visible output`, () => {
+      const turn = probe('reasoning', { output, reasoning }, '120')
+      turn.stored = [{ tokens: { output: storedOutput } }]
+      expect(billingChecks([turn])[1]).toMatchObject({
+        verdict: 'PASS',
+        reason: expect.stringContaining('OpenCode stored visible output'),
+      })
+    })
+  }
+
   test('reasoning exceeding output FAILs', () => {
     expect(reasoningCheck({ output: 100, reasoning: 101 })).toMatchObject({
       verdict: 'FAIL',
@@ -110,9 +125,44 @@ describe('billing report checks', () => {
     })
   })
 
-  test('reasoning difference outside the visible estimate factor of two FAILs', () => {
-    for (const output of [102, 100])
-      expect(reasoningCheck({ output, reasoning: 100 }).verdict).toBe('FAIL')
+  test('stored visible output takes precedence with an inclusive ±1 tolerance', () => {
+    for (const [output, verdict] of [
+      [1, 'PASS'],
+      [3, 'PASS'],
+      [0, 'FAIL'],
+      [4, 'FAIL'],
+    ] as const) {
+      const turn = probe('reasoning', { output: 102, reasoning: 100 })
+      turn.stored = [{ tokens: { output } }]
+      expect(billingChecks([turn])[1].verdict).toBe(verdict)
+    }
+    const zero = probe('reasoning', { output: 100, reasoning: 100 }, '')
+    zero.stored = [{ tokens: { output: 0 } }]
+    expect(billingChecks([zero])[1].verdict).toBe('PASS')
+  })
+
+  test('reasoning exceeding output FAILs even when stored output is available', () => {
+    const turn = probe('reasoning', { output: 100, reasoning: 101 })
+    turn.stored = [{ tokens: { output: 0 } }]
+    expect(billingChecks([turn])[1].verdict).toBe('FAIL')
+  })
+
+  test('fallback accepts short replies within ±8 tokens, not beyond', () => {
+    for (const [output, verdict] of [
+      [109, 'PASS'],
+      [110, 'FAIL'],
+    ] as const) {
+      expect(reasoningCheck({ output, reasoning: 100 }, '1234').verdict).toBe(
+        verdict,
+      )
+    }
+  })
+
+  test('reasoning difference outside both fallback tolerances FAILs', () => {
+    for (const output of [301, 149])
+      expect(
+        reasoningCheck({ output, reasoning: 100 }, 'x'.repeat(400)).verdict,
+      ).toBe('FAIL')
   })
 
   test('missing reasoning count is UNTESTED rather than invented zero', () => {
@@ -141,7 +191,7 @@ describe('billing report checks', () => {
     expect(billingChecks([], [reports[0]])[2].verdict).toBe('UNTESTED')
   })
 
-  test('raw host counters are not verdict inputs', () => {
+  test('raw host counters are not cache verdict inputs', () => {
     const probes = [
       probe('long-1', { input: 5000 }),
       probe('long-2', { input: 4000, cache_read: 1000 }),
