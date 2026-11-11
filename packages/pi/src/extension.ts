@@ -3,6 +3,7 @@ import {
   type ActivationEffect,
   type ActivationEvent,
   type ActivationState,
+  BillingAttempt,
   ClaustrumAuthError,
   type CoreFetch,
   type CoreOptions,
@@ -10,6 +11,7 @@ import {
   command,
   type createCore,
   createFetch,
+  hasBillingAccessor,
   initialActivation,
   type ProviderEntry,
   piEnrollment,
@@ -330,13 +332,43 @@ class PiRuntime {
     if (options?.apiKey !== served.placeholder)
       return streamSimple(model, context, options)
     const inner = (options.fetch ?? globalThis.fetch) as CoreFetch
-    return streamSimple(model, context, {
+    if (!hasBillingAccessor())
+      return streamSimple(model, context, {
+        ...options,
+        fetch: this.ownedFetch(served, inner) as typeof fetch,
+      })
+    let current: BillingAttempt | undefined
+    let attempt = 0
+    const stream = streamSimple(model, context, {
       ...options,
-      fetch: this.ownedFetch(served, inner) as typeof fetch,
+      fetch: this.ownedFetch(served, inner, (receipt) => {
+        current?.end()
+        if (!hasBillingAccessor()) return undefined
+        current = new BillingAttempt(
+          served.entry,
+          model.provider,
+          options.sessionId ?? this.#ctx.sessionManager.getSessionId(),
+          'primary',
+          model.id,
+          receipt,
+          ++attempt,
+          true,
+        )
+        return current
+      }) as typeof fetch,
     })
+    void stream.result().then(
+      (message) => current?.piEnd(message.responseId, message.stopReason),
+      () => current?.end(),
+    )
+    return stream
   }
 
-  ownedFetch(served: Served, inner: CoreFetch): CoreFetch {
+  ownedFetch(
+    served: Served,
+    inner: CoreFetch,
+    billing?: Parameters<typeof createFetch>[0]['billing'],
+  ): CoreFetch {
     const serve = createFetch({
       entry: served.entry,
       placeholder: served.placeholder,
@@ -345,6 +377,7 @@ class PiRuntime {
       fetch: inner,
       rateLimitMarks: served.marks,
       limits: () => this.#core.limits(served.provider),
+      billing,
     })
     return async (input, init) => {
       try {

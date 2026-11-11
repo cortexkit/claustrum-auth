@@ -10,6 +10,7 @@
 // session event with its order, and what the host's retry hook was handed.
 // None of these records ever holds a served secret: only provider ids,
 // account ids, kinds, sessions, and whether a header was the placeholder.
+import './billing-preload.ts'
 import { appendFileSync } from 'node:fs'
 import path from 'node:path'
 import { writeEnrollmentTokenFile } from '@cortexkit/claustrum-client'

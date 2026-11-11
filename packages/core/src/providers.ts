@@ -5,6 +5,33 @@ import type {
 
 export type Host = 'opencode1' | 'opencode2' | 'pi'
 export type ProviderClass = 'A' | 'B' | 'C' | 'D'
+export interface BillingSemantics {
+  input: readonly string[]
+  output: readonly string[]
+  cacheRead?: readonly string[]
+  cacheWrite?: readonly string[]
+  reasoning?: readonly string[]
+  promptIncludesCache: boolean
+  reasoningIncludedInOutput?: boolean
+  implicitCache?: true
+  opencodeTokens?: true
+}
+// Standard OpenAI field meanings are assumptions where a provider only names
+// the fields. Provider-specific exceptions and sources: docs/billing-reports.md.
+const openAIUsage = {
+  input: ['usage.prompt_tokens', 'usage.input_tokens'],
+  output: ['usage.completion_tokens', 'usage.output_tokens'],
+  cacheRead: [
+    'usage.prompt_tokens_details.cached_tokens',
+    'usage.input_tokens_details.cached_tokens',
+  ],
+  reasoning: [
+    'usage.completion_tokens_details.reasoning_tokens',
+    'usage.output_tokens_details.reasoning_tokens',
+  ],
+  promptIncludesCache: true,
+  reasoningIncludedInOutput: true,
+} satisfies BillingSemantics
 export interface ProviderEntry {
   service: string
   // The fleet's provider ids for this service: the vocabulary vault rows carry
@@ -24,6 +51,8 @@ export interface ProviderEntry {
   // handshake of the provider is refused before any vault read.
   handshakeOrigins?: readonly string[]
   accountPath?: readonly string[]
+  chargeBasis?: 'subscription_included' | 'metered_api'
+  billing?: BillingSemantics
 }
 export interface HostFacts {
   host: Host
@@ -52,6 +81,9 @@ export interface HostFacts {
 export const supportedProviders: readonly ProviderEntry[] = [
   {
     service: 'cerebras',
+    // One key can use trial, PayGo, or Code Pro: https://www.cerebras.ai/pricing and https://www.cerebras.ai/code
+    // Automatic caching: https://inference-docs.cerebras.ai/capabilities/prompt-caching
+    billing: { ...openAIUsage, implicitCache: true },
     ids: ['cerebras'],
     hosts: { opencode1: 'cerebras', opencode2: 'cerebras', pi: 'cerebras' },
     class: 'A',
@@ -66,6 +98,9 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // through this exact credential id instead, only while the row has no
     // provider ids.
     service: 'cline-pass',
+    // Flat ClinePass key: https://docs.cline.bot/getting-started/clinepass.md
+    chargeBasis: 'subscription_included',
+    billing: { ...openAIUsage },
     ids: ['cline-pass'],
     credentialIds: ['apikey:cline-pass'],
     hosts: { opencode1: 'cline-pass', opencode2: 'cline-pass' },
@@ -74,6 +109,14 @@ export const supportedProviders: readonly ProviderEntry[] = [
   },
   {
     service: 'deepseek',
+    // Pay-per-token API keys: https://api-docs.deepseek.com/quick_start/pricing
+    chargeBasis: 'metered_api',
+    // Automatic context caching: https://api-docs.deepseek.com/guides/kv_cache
+    billing: {
+      ...openAIUsage,
+      cacheRead: ['usage.prompt_cache_hit_tokens', ...openAIUsage.cacheRead],
+      implicitCache: true,
+    },
     ids: ['deepseek'],
     hosts: { opencode1: 'deepseek', opencode2: 'deepseek', pi: 'deepseek' },
     class: 'A',
@@ -83,6 +126,17 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // The fleet id is `fireworks-ai`; OpenCode's id is `fireworks-ai` and
     // Pi's is `fireworks`.
     service: 'fireworks',
+    // Token-priced API: https://fireworks.ai/pricing
+    chargeBasis: 'metered_api',
+    // Automatic prefix caching: https://docs.fireworks.ai/guides/prompt-caching
+    billing: {
+      ...openAIUsage,
+      cacheRead: [
+        'perf_metrics.cached-prompt-tokens',
+        ...openAIUsage.cacheRead,
+      ],
+      implicitCache: true,
+    },
     ids: ['fireworks-ai'],
     hosts: {
       opencode1: 'fireworks-ai',
@@ -94,6 +148,13 @@ export const supportedProviders: readonly ProviderEntry[] = [
   },
   {
     service: 'inception',
+    // Token-priced API: https://www.inceptionlabs.ai/pricing
+    chargeBasis: 'metered_api',
+    billing: {
+      ...openAIUsage,
+      cacheRead: ['usage.cached_input_tokens', ...openAIUsage.cacheRead],
+      reasoning: ['usage.reasoning_tokens', ...openAIUsage.reasoning],
+    },
     ids: ['inception'],
     hosts: { opencode1: 'inception', opencode2: 'inception' },
     class: 'A',
@@ -103,6 +164,14 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // OpenCode's catalog uses the fleet's global-plan id; Pi calls the same
     // service `kimi-coding`. Both documented regional API origins are exact.
     service: 'kimi-coding',
+    // Coding membership key: https://www.kimi.com/code/docs/en/
+    chargeBasis: 'subscription_included',
+    // Chat caching semantics are assumed for Code: https://platform.kimi.ai/docs/guide/context-caching
+    billing: {
+      ...openAIUsage,
+      cacheWrite: ['usage.prompt_tokens_details.cache_write_tokens'],
+      implicitCache: true,
+    },
     ids: ['kimi-code-plan-global'],
     hosts: {
       opencode1: 'kimi-code-plan-global',
@@ -115,6 +184,10 @@ export const supportedProviders: readonly ProviderEntry[] = [
   {
     // OpenCode 1 sends x-api-key; Pi does not register this provider.
     service: 'minimax-coding-plan',
+    // Coding-plan key: https://platform.minimax.io/docs/coding-plan/intro
+    chargeBasis: 'subscription_included',
+    // Automatic repeated-context caching: https://platform.minimax.io/docs/api-reference/text-prompt-caching.md
+    billing: { ...openAIUsage, implicitCache: true },
     ids: ['minimax-coding-plan'],
     hosts: { opencode2: 'minimax-coding-plan' },
     class: 'A',
@@ -122,6 +195,8 @@ export const supportedProviders: readonly ProviderEntry[] = [
   },
   {
     service: 'ollama-cloud',
+    // The same key spans plan credits and PayGo: https://ollama.com/pricing
+    billing: { ...openAIUsage },
     ids: ['ollama-cloud'],
     hosts: { opencode1: 'ollama-cloud', opencode2: 'ollama-cloud' },
     class: 'A',
@@ -129,6 +204,12 @@ export const supportedProviders: readonly ProviderEntry[] = [
   },
   {
     service: 'openrouter',
+    // Credit-funded API: https://openrouter.ai/pricing
+    chargeBasis: 'metered_api',
+    billing: {
+      ...openAIUsage,
+      cacheWrite: ['usage.prompt_tokens_details.cache_write_tokens'],
+    },
     ids: ['openrouter'],
     hosts: {
       opencode1: 'openrouter',
@@ -140,6 +221,8 @@ export const supportedProviders: readonly ProviderEntry[] = [
   },
   {
     service: 'synthetic',
+    // A key spans subscription credits and usage-based top-ups: https://synthetic.new/pricing
+    billing: { ...openAIUsage },
     ids: ['synthetic'],
     hosts: { opencode1: 'synthetic', opencode2: 'synthetic' },
     class: 'A',
@@ -150,6 +233,13 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // api, which does not take a caller fetch, so the plugin's fetch never
     // sees a typesafe request there.
     service: 'typesafe',
+    // Input is billable API usage: https://docs.typesafe.ai/api/system-one.md
+    chargeBasis: 'metered_api',
+    billing: {
+      input: ['usage.input_tokens'],
+      output: ['usage.output_tokens'],
+      promptIncludesCache: false,
+    },
     ids: ['typesafe'],
     hosts: { opencode1: 'typesafe', opencode2: 'typesafe' },
     class: 'A',
@@ -159,6 +249,10 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // An OAuth row: the vault serves a minted inference key with an expiry,
     // which custody requires of every OAuth read (docs/providers.md, "Meta").
     service: 'meta',
+    // Token-priced Model API (not Muse Code): https://dev.meta.ai/docs/pricing-rate-limits
+    chargeBasis: 'metered_api',
+    // Automatic prefix caching: https://dev.meta.ai/docs/prompt-caching
+    billing: { ...openAIUsage, implicitCache: true },
     ids: ['meta'],
     hosts: { opencode1: 'meta', opencode2: 'meta', pi: 'meta' },
     class: 'A',
@@ -171,6 +265,10 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // (docs/providers.md, "xAI on OpenCode 2"); the HTTP fallback the host
     // takes after a failed handshake is served like any other request.
     service: 'xai',
+    // Token-priced API: https://docs.x.ai/docs/models
+    chargeBasis: 'metered_api',
+    // Automatic matching-prefix cache: https://docs.x.ai/developers/advanced-api-usage/prompt-caching
+    billing: { ...openAIUsage, implicitCache: true },
     ids: ['xai'],
     hosts: { opencode1: 'xai', opencode2: 'xai', pi: 'xai' },
     class: 'A',
@@ -183,6 +281,8 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // models send it in `x-api-key` or `x-goog-api-key` and are refused per
     // request (docs/providers.md, "OpenCode Go").
     service: 'opencode-go',
+    // One key spans plan allowance and optional PayGo Extra Usage: https://opencode.ai/docs/go/
+    billing: { ...openAIUsage, opencodeTokens: true },
     ids: ['opencode-go'],
     hosts: {
       opencode1: 'opencode-go',
@@ -198,6 +298,9 @@ export const supportedProviders: readonly ProviderEntry[] = [
     // the request hooks (design section 5.2, class D). Per-model drivers as
     // opencode-go.
     service: 'opencode-zen',
+    // Prepaid token-priced key: https://opencode.ai/docs/zen/
+    chargeBasis: 'metered_api',
+    billing: { ...openAIUsage, opencodeTokens: true },
     ids: ['opencode'],
     hosts: { opencode1: 'opencode', pi: 'opencode' },
     class: 'A',

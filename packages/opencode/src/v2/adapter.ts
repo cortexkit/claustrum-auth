@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import {
   type AccountLimits,
+  BillingAttempt,
   ClaustrumAuthError,
   checkHandshakeOrigin,
   hasBalanceRule,
+  hasBillingAccessor,
   isBalanceFailure,
   isLocalLimitRefusal,
   type LimitObservation,
   limitFromReply,
   localLimitRefusal,
   localLimitRetry,
+  observeBillingResponse,
   type ProviderEntry,
   redactError,
   redactResponse,
@@ -63,6 +66,8 @@ export interface VaultAttempt {
   handshakeURL?: string
   /** A provider status an error frame of this attempt carried. */
   frameStatus?: number
+  billing?: BillingAttempt
+  billingAttempt?: number
 }
 
 /** Identifies a session's socket: the host keeps one per session and kind. */
@@ -290,6 +295,7 @@ export function createVaultAdapter(
     { until: number; cause?: 'rate-limit' | 'payment-balance' }
   >()
   const placeholder = placeholderSecret(options.provider)
+  let billingAttempts: Map<string, number> | undefined
   const refuse = (error: unknown) => {
     if (
       error instanceof ClaustrumAuthError &&
@@ -303,6 +309,11 @@ export function createVaultAdapter(
     ?.length
     ? ({ transport, data, attempt }) => {
         if (transport !== 'ws') return undefined
+        if (attempt.data?.billing) {
+          try {
+            attempt.data.billing.event(JSON.parse(data))
+          } catch {}
+        }
         const verdict = inspectResponsesFrame(
           data,
           attempt.data,
@@ -344,6 +355,17 @@ export function createVaultAdapter(
   return {
     providerID: options.provider,
     async chooseAccount(input) {
+      if (hasBillingAccessor() && input.hostAttempt !== undefined) {
+        billingAttempts ??= new Map()
+        billingAttempts.set(
+          socketKey(input.sessionID, input.kind),
+          input.hostAttempt,
+        )
+        if (billingAttempts.size > 256) {
+          const oldest = billingAttempts.keys().next().value
+          if (oldest !== undefined) billingAttempts.delete(oldest)
+        }
+      }
       // A provider whose driver never sends its key in Authorization is
       // refused the same way for every account, before any vault read.
       if (options.entry.class === 'C' || options.entry.class === 'D')
@@ -447,6 +469,7 @@ export function createVaultAdapter(
     async accountHeaders({
       sessionID,
       kind,
+      modelID,
       accountId,
     }): Promise<AccountHeadersResult<VaultAttempt>> {
       // HTTP: the vault is read in `rewriteRequest`, after the origin check.
@@ -454,9 +477,14 @@ export function createVaultAdapter(
       // so the plugin's handshake hook checked the origin before this call
       // and left the URL here; only then is the vault read now.
       const key = socketKey(sessionID, kind)
+      const hostAttempt = billingAttempts?.get(key)
+      billingAttempts?.delete(key)
       const url = options.handshakes?.pending.get(key)
       if (url === undefined)
-        return { headers: {}, attempt: {} satisfies VaultAttempt }
+        return {
+          headers: {},
+          attempt: { billingAttempt: hostAttempt } satisfies VaultAttempt,
+        }
       options.handshakes?.pending.delete(key)
       // The handshake URL has no account segment the plugin could fill.
       if (options.entry.class !== 'A')
@@ -483,6 +511,19 @@ export function createVaultAdapter(
           handshakeURL: url,
           limits,
           observation,
+          ...(hasBillingAccessor()
+            ? {
+                billing: new BillingAttempt(
+                  options.entry,
+                  options.provider,
+                  sessionID,
+                  kind,
+                  modelID,
+                  receipt,
+                  hostAttempt,
+                ),
+              }
+            : {}),
         } satisfies VaultAttempt,
       }
     },
@@ -543,6 +584,16 @@ export function createVaultAdapter(
         holder.consumer = consumer
         holder.limits = served.limits
         holder.observation = served.observation
+        if (hasBillingAccessor())
+          holder.billing = new BillingAttempt(
+            options.entry,
+            options.provider,
+            attempt.sessionID,
+            attempt.kind,
+            attempt.modelID,
+            served.receipt,
+            holder.billingAttempt,
+          )
       }
       try {
         return await rebuild(request, served.url, served.headers)
@@ -560,7 +611,10 @@ export function createVaultAdapter(
     async rewriteResponse({ response, attempt }) {
       const secret = attempt.data?.receipt?.accessToken
       if (!secret) return undefined
-      const rewritten = await redactResponse(response, [secret])
+      const rewritten = observeBillingResponse(
+        attempt.data?.billing,
+        await redactResponse(response, [secret]),
+      )
       return isLocalLimitRefusal(response)
         ? localLimitRefusal(rewritten, localLimitRetry(response))
         : rewritten
@@ -590,6 +644,12 @@ export function createVaultAdapter(
     ...(inspectEvent ? { inspectEvent } : {}),
     async onAttemptEnd(attempt, outcome) {
       const data = attempt.data
+      if (attempt.transport === 'ws' || outcome.status === undefined)
+        data?.billing?.end(
+          outcome.outputStarted,
+          outcome.error === undefined,
+          outcome.status ?? data.frameStatus,
+        )
       const parsed = data?.limit
       const mark = markFromSignal(parsed, statusVaultOrder.markers.opencode2, {
         now: now(),

@@ -521,6 +521,48 @@ const onWire = (run: Scenario, needle: string) =>
   )
 
 describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
+  test('billing: a real vault-served HTTP turn reports completed provider usage', async () => {
+    await scenario(
+      [{ id: 'apikey:cerebras', providerIds: ['cerebras'] }],
+      async (run) => {
+        expect((await run.login('cerebras')).exit).toBe(0)
+        expect((await run.turn('cerebras')).exit).toBe(0)
+        const reports = readFileSync(
+          path.join(run.root, 'billing.jsonl'),
+          'utf8',
+        )
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+        const primary = reports.filter(
+          (report) => report.request_kind === 'primary',
+        )
+        expect(primary).toHaveLength(1)
+        expect(primary[0]).toMatchObject({
+          kind: 'billing',
+          attempt_id: expect.any(String),
+          credential_id: 'apikey:cerebras',
+          provider: 'cerebras',
+          model: 'mock-model',
+          outcome: 'completed',
+          status: 200,
+          provider_response_id: 'chatcmpl-mock',
+          usage: { input: 5, output: 2, reasoning_included_in_output: true },
+          cache: { implicit: true },
+        })
+        expect(primary[0]?.usage).not.toHaveProperty('cache_read')
+      },
+      {
+        beforeStart: async (run) => {
+          run.env.CLAUSTRUM_AUTH_E2E_REAL_ROWS = '1'
+          run.env.CLAUSTRUM_AUTH_E2E_BILLING = path.join(
+            run.root,
+            'billing.jsonl',
+          )
+        },
+      },
+    )
+  })
   beforeAll(async () => {
     scratch = await mkdtemp(path.join(tmpdir(), 'claustrum-auth-oc2-cli-'))
     const cliDir = REUSE_CLI_DIR ?? path.join(scratch, 'cli')

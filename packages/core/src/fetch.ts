@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { ClaustrumScopedAttempt } from '@cortexkit/common-auth/claustrum'
 import {
   createRequestHistory,
   decideAfterLimit,
@@ -8,6 +9,7 @@ import {
   statusVaultOrder,
 } from '@cortexkit/common-auth/limits'
 import { hasBalanceRule } from './balance.js'
+import { type BillingAttempt, observeBillingResponse } from './billing.js'
 import { limitFromReply, limitRefusal } from './limits.js'
 import {
   ClaustrumAuthError,
@@ -30,6 +32,7 @@ export interface FetchOptions extends ServingOptions {
   // The host supplies its own effective-key resolution, including environment
   // case rules and config precedence. The check is repeated on every request.
   effectiveCredential?: () => boolean | Promise<boolean>
+  billing?: (receipt: ClaustrumScopedAttempt) => BillingAttempt | undefined
 }
 
 async function bufferBody(request: Request): Promise<Uint8Array | undefined> {
@@ -257,7 +260,16 @@ export function createFetch(options: FetchOptions): CoreFetch {
                 credentials: template.credentials,
                 cache: template.cache,
               })
-              return options.fetch(outbound)
+              const billing = options.billing?.(receipt)
+              try {
+                return observeBillingResponse(
+                  billing,
+                  await options.fetch(outbound),
+                )
+              } catch (error) {
+                billing?.end(false, false)
+                throw error
+              }
             },
             { site: 'claustrum-auth', signal },
           )

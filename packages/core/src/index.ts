@@ -9,6 +9,12 @@ export {
   transitionActivation,
 } from './activation.js'
 export { hasBalanceRule, isBalanceFailure } from './balance.js'
+export {
+  BillingAttempt,
+  billingUsage,
+  hasBillingAccessor,
+  observeBillingResponse,
+} from './billing.js'
 export type { CoreFetch, FetchOptions } from './fetch.js'
 export { createFetch, maxBodyBytes } from './fetch.js'
 export { hasVaultHost } from './host.js'
