@@ -10,7 +10,7 @@ import {
   chatResponse,
   expectedUsage,
 } from '../../core/test/billing-fixtures.ts'
-import { liveHarness, vaultRowFor } from '../../core/test/fakes.ts'
+import { vaultRowFor } from '../../core/test/fakes.ts'
 import { installVaultHost } from '../../core/test/host.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
@@ -37,21 +37,38 @@ async function turn(
         }),
       }
     : base
-  const h = await liveHarness(
-    [
-      vaultRowFor(entry, { accountId: 'account-1' }),
-      ...(retry
-        ? [
-            vaultRowFor(entry, {
-              id: `apikey:${provider}:second`,
-              accountId: 'account-2',
-            }),
-          ]
-        : []),
-    ],
-    'pi',
-  )
-  installVaultHost(h.client)
+  const rows = [
+    vaultRowFor(entry, { accountId: 'account-1' }),
+    ...(retry
+      ? [
+          vaultRowFor(entry, {
+            id: `apikey:${provider}:second`,
+            accountId: 'account-2',
+          }),
+        ]
+      : []),
+  ]
+  // The extension creates the core under test. An in-memory vault client avoids
+  // a second, unused core's token write and roster refresh during fixture setup.
+  installVaultHost({
+    async listScoped() {
+      return { rows, view: 'view-1', grants: undefined, grantTuples: undefined }
+    },
+    async getScoped({ credentialId }) {
+      const listed = rows.find((row) => row.id === credentialId)
+      if (!listed)
+        throw new Error(`unknown fixture credential: ${credentialId}`)
+      return {
+        credentialId,
+        material: `secret-${credentialId}-1`,
+        accountId: listed.accountId,
+        recordVersion: 1,
+        expiresAtMs: null,
+      }
+    },
+    async reportAuthFailureScoped() {},
+    close() {},
+  })
   const agent = await agentDir({
     enrolled: false,
     flags: { [provider]: { consented: true } },
