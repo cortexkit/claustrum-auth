@@ -34,6 +34,7 @@ Paths below are relative to the repository root.
 | Placement | `packages/core/src/placement.ts` | Ownership and placement checks, origin checks, refusal codes, error and response scrubbing. |
 | Serving | `packages/core/src/fetch.ts`, `serving.ts` | One owned request: route choice, vault send, redirects, limits, scrubbing. |
 | Limits | `packages/core/src/limits.ts`, `balance.ts` | The shared limit policy, and which 402s mean an empty balance. |
+| Thalamus routing | `packages/core/src/routing.ts` | Asks routing which API key serves, its fixed refusal texts, and balance reports. |
 | Runtime | `packages/core/src/runtime.ts` | Builds the hub and its members from the table for one host. |
 | Activation | `packages/core/src/activation.ts` | The state machine for activating and releasing a provider. |
 | Menu, startup | `packages/core/src/menu.ts`, `startup.ts` | `/claustrum` text; startup errors with fixed labels only. |
@@ -61,7 +62,7 @@ Fleet ids the table doesn't know are refused rather than guessed, so a vault own
 
 1. **Ownership and placement first, before any vault read.** The placeholder must appear exactly once, as `Authorization: Bearer <placeholder>`; anywhere else, or more than once, refuses (`placement-refused`). A request without it is foreign and passed on untouched.
 2. **Origin.** The URL's scheme, host and port must match one of the entry's origins, with no user or password in the URL; a `baseURL` override to another origin refuses (`origin-refused`). The body is capped at 64 MiB.
-3. **Route.** The shared limit decision picks the next admitted vault account in roster order.
+3. **Route.** The shared limit decision picks the next admitted vault account in roster order. When Thalamus routing is present (its accessor at `globalThis[Symbol.for('cortexkit.routing')]`, read on each request) and that account is an API key, the plugin asks routing instead (see Thalamus routing).
 4. **Send.** `consumer.send` asks the vault for a key for this send and the plugin puts it only into `Authorization: Bearer`. Redirects are handled manually: only a same-origin redirect is followed, rechecked against the origins, at most five times; a cross-origin redirect, or one whose address contains the served key, is returned unfollowed.
 5. **After the reply.** A limit reply may move the request to the next account (see Several accounts). Every response is scrubbed of each key served for it, in bodies, streamed error events and headers, before the host sees it.
 
@@ -77,6 +78,15 @@ Accounts are tried in roster order, which the user can change with `/claustrum r
 - **Persistence:** marks live in the local vault roster, shared by every process using it. The limits state reloads when the vault's account list changes, so an account that arrives just after start is recognized.
 - **401:** reported to the vault only for the key this host was served for that request.
 
+## Thalamus routing
+
+When Thalamus starts the host, routing owns which paid key a request spends. So an API key is never used on the plugin's own choice there (`selectRoutedKey` in `packages/core/src/routing.ts`, called from the shared fetch and the OpenCode 2 adapter):
+
+- **Per attempt.** The plugin works out its next account as usual. If that's an OAuth (subscription) row, it is sent as today, without asking routing. If it's an API key, the plugin asks common-auth's `askRouting` with `refusals: true`. The candidates are the provider's enabled API-key rows not yet tried in this request, each as `{accountId, credentialId}`: the row's account id if the vault gives one, otherwise its credential id.
+- **The answer.** A pick is sent on that key. A refusal sends nothing and fails with "Thalamus routing declined this request, so it was not sent." No answer (a timeout at common-auth's 1.5 s default, a failed call, an unreadable reply, or a request with no session id) also sends nothing, with "Thalamus routing did not answer, so this API key request was not sent." While routing is away, a paid key is never spent on the plugin's own choice, because routing owns that spending. Without the accessor, nothing here applies and the plugin chooses as before. A retry to another key in the same request asks again; a same-origin redirect keeps the key routing picked.
+- **Routing's pick is final.** The plugin's own rate-limit and balance marks don't veto it (`routingAdmitted` in `packages/core/src/serving.ts`), though the user's on/off switch and vault authorization still apply. The vault's retry of a 401 with a newer version of the same key stays inside the pick.
+- **Balance reports.** After a routed send, a qualifying empty balance is reported to routing as `credential_refused`, with the provider's own code: `openrouter_credits` for OpenRouter's credits refusal, `http_402` for DeepSeek.
+
 ## OpenCode 1
 
 The config hook installs `options.fetch` on every served provider (`packages/opencode/src/v1/plugin.ts`); it serves owned requests and hands everything else to the fetch that was there before. OpenCode 1 runs the plugin once per project in one process, so instances with the same state share one hub through a process-wide registry.
@@ -85,6 +95,7 @@ The config hook installs `options.fetch` on every served provider (`packages/ope
 - **Shadowing:** if one of the provider's environment variables is set while the placeholder is stored, the placeholder hides the user's key. Owned requests are then refused locally with a message naming the fix (release the provider, or remove the variable), so the plugin never serves from the vault while a user's key is hidden. Variable names are matched exactly, as OpenCode 1 matches them.
 - **Released providers:** a persisted `released` flag per provider keeps anything automatic from re-entering it; only `/claustrum use` clears it.
 - Command hooks can't finish without a model turn on OpenCode 1, so a handled `/claustrum` command ends with a fixed error.
+- **Session id for routing:** the `chat.headers` hook adds a `session-id` header to the plugin's own providers' requests. The fetch reads it for the routing question and removes it before the request leaves for the provider.
 
 ## OpenCode 2
 
@@ -123,12 +134,14 @@ In hosted mode (`CORTEXKIT_VAULT_HOST=thalamus`), the hub connects through the c
 5. **No served key in anything the host sees:** response bodies, streamed errors, headers, error messages and startup errors are scrubbed, and every refusal and status text is fixed.
 6. **Only documented empty-balance 402s move a request.** Every other 402 stays with the user.
 7. **No automatic re-entry after release.** A released provider returns only on an explicit `/claustrum use` or vault login.
+8. **Under Thalamus routing, an API key is used only on routing's pick.** A refusal or no answer sends nothing.
 
 ## Failure handling
 
 - **Vault unreachable:** common-auth's consumer keeps the last key the vault served each account, in memory only, and serves it until it expires; then owned requests are refused locally. An unreachable vault leaves the last committed roster in place.
 - **No vault account for a provider:** owned requests are refused locally with a fixed message that says whether vault mode is off, the vault serves no account, or the roster couldn't be saved.
 - **All accounts set aside:** a fresh request probes the first one.
+- **Routing refuses or doesn't answer:** an API-key request is refused locally with a fixed text, and nothing is sent.
 - **Startup failure:** the host gets a fixed label and a known filesystem code only (`packages/core/src/startup.ts`).
 
 ## Development
