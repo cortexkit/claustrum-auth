@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -25,6 +25,11 @@ jobs:
       - run: bun run build
       - run: bun run typecheck
       - run: bun run lint
+      - name: Measure provider origin phases on Windows
+        if: runner.os == 'Windows'
+        run: bun test packages/core/test/providers.test.ts -t 'a shipped provider serves its vault row only to its documented origin'
+        env:
+          CLAUSTRUM_AUTH_TEST_TIMING: '1'
       - name: Unit tests, including published setup preview and the vault menu
         run: bun run test
       - name: Refuse tracked ignored CortexKit files
