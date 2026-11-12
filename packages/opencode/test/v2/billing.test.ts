@@ -11,6 +11,7 @@ import {
   expectedUsage,
 } from '../../../core/test/billing-fixtures.ts'
 import { vaultRowFor } from '../../../core/test/fakes.ts'
+import { installRoutingAccessor } from '../../../core/test/routing-accessor-fixture.ts'
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { scope, startServer, trigger } from './fakes.ts'
 
@@ -111,7 +112,7 @@ test('a reply model alias keeps one report at the sent model without usageByMode
 })
 
 test('without an accessor a served host request never looks up billing semantics', async () => {
-  Reflect.deleteProperty(globalThis, Symbol.for('cortexkit.routing'))
+  installRoutingAccessor()
   const base = supportedProviders.find((entry) => entry.service === 'deepseek')
   if (!base?.billing) throw new Error('missing deepseek')
   let parsed = 0

@@ -1,11 +1,4 @@
-import { afterEach } from 'bun:test'
-
-const symbol = Symbol.for('cortexkit.routing')
-const original = Object.getOwnPropertyDescriptor(globalThis, symbol)
-afterEach(() => {
-  if (original) Object.defineProperty(globalThis, symbol, original)
-  else Reflect.deleteProperty(globalThis, symbol)
-})
+import { installRoutingAccessor } from './routing-accessor-fixture.ts'
 
 export function captureBilling(
   keepWarm = false,
@@ -15,18 +8,15 @@ export function captureBilling(
 ) {
   const reports: Record<string, unknown>[] = []
   const sessions: string[] = []
-  Object.defineProperty(globalThis, symbol, {
-    configurable: true,
-    value: (session: string) => {
-      sessions.push(session)
-      return {
-        accountFor,
-        report: (report: Record<string, unknown>) => {
-          reports.push(report)
-        },
-        cache: () => (keepWarm ? { keep_warm: 'always' } : null),
-      }
-    },
+  installRoutingAccessor((session: string) => {
+    sessions.push(session)
+    return {
+      accountFor,
+      report: (report: Record<string, unknown>) => {
+        reports.push(report)
+      },
+      cache: () => (keepWarm ? { keep_warm: 'always' } : null),
+    }
   })
   return { reports, sessions }
 }

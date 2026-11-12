@@ -9,8 +9,11 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
+import { setTestEnv } from '../../core/test/env.ts'
 import { harness, row } from '../../core/test/fakes.ts'
 import { installVaultHost } from '../../core/test/host.ts'
+import { installRoutingAccessor } from '../../core/test/routing-accessor-fixture.ts'
+import { routing } from '../../core/test/routing-fixtures.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
 import { FlagStore } from '../src/flags.ts'
@@ -120,7 +123,7 @@ const servedProvider = 'fixture-a'
 test('Pi startup refusal names model registration and the remedy without echoing the host error', async () => {
   const h = await harness([])
   const agent = await agentDir({})
-  process.env.PI_CODING_AGENT_DIR = agent.agent
+  setTestEnv('PI_CODING_AGENT_DIR', agent.agent)
   const handlers: Record<
     string,
     (event: unknown, ctx: unknown) => Promise<void>
@@ -201,7 +204,7 @@ async function servedTurn(options: {
       : {}),
     flags: { [servedProvider]: { consented: true } },
   })
-  process.env.PI_CODING_AGENT_DIR = agent.agent
+  setTestEnv('PI_CODING_AGENT_DIR', agent.agent)
   if (options.hosted === 'missing')
     await openPiSlot({
       authPath: agent.authPath,
@@ -340,6 +343,20 @@ test('hosted Pi serves the relay vault key without enrollment or native connect'
   expect(sends).toBe(1)
   expect(authorizations).toEqual(['Bearer secret-a-1'])
   expect(relay?.calls).toEqual(['claustrum-auth'])
+})
+
+test('Pi without a session manager stops an API-key request only under routing', async () => {
+  installRoutingAccessor()
+  const outside = await servedTurn({ hosted: 'relay' })
+  expect(outside.sends).toBe(1)
+  expect(outside.authorizations).toEqual(['Bearer secret-a-1'])
+  const { calls } = routing(async () => ({ account_id: 'account-a' }))
+  const { sends, message } = await servedTurn({ hosted: 'relay' })
+  expect(message).toContain(
+    'Thalamus routing did not answer, so this API key request was not sent.',
+  )
+  expect(sends).toBe(0)
+  expect(calls).toEqual([])
 })
 
 test('a route withdrawn while a turn is served gets the plugin text, and nothing is sent', async () => {

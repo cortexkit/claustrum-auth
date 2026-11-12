@@ -10,8 +10,10 @@ import {
   chatResponse,
   expectedUsage,
 } from '../../core/test/billing-fixtures.ts'
+import { setTestEnv } from '../../core/test/env.ts'
 import { vaultRowFor } from '../../core/test/fakes.ts'
 import { installVaultHost } from '../../core/test/host.ts'
+import { installRoutingAccessor } from '../../core/test/routing-accessor-fixture.ts'
 import { routing } from '../../core/test/routing-fixtures.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
@@ -75,7 +77,7 @@ async function turn(
     enrolled: false,
     flags: { [provider]: { consented: true } },
   })
-  process.env.PI_CODING_AGENT_DIR = agent.agent
+  setTestEnv('PI_CODING_AGENT_DIR', agent.agent)
   let registered: Record<string, unknown> | undefined
   const handlers: Record<
     string,
@@ -269,7 +271,7 @@ test('Pi followed same-origin redirect reports only the completed model call', a
 })
 
 test('Pi without an accessor never looks up usage semantics for a served request', async () => {
-  Reflect.deleteProperty(globalThis, Symbol.for('cortexkit.routing'))
+  installRoutingAccessor()
   let parsed = 0
   await turn(
     'deepseek',

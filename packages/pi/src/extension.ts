@@ -331,8 +331,10 @@ class PiRuntime {
     // runtime override goes to pi-ai exactly as Pi resolved it.
     if (options?.apiKey !== served.placeholder)
       return streamSimple(model, context, options)
+    const sessionId =
+      options.sessionId ?? this.#ctx.sessionManager?.getSessionId()
     const routing = {
-      sessionId: options.sessionId ?? this.#ctx.sessionManager.getSessionId(),
+      sessionId,
       provider: model.provider,
       modelId: model.id,
     }
@@ -356,11 +358,11 @@ class PiRuntime {
         inner,
         (receipt) => {
           current?.end()
-          if (!hasBillingAccessor()) return undefined
+          if (!sessionId || !hasBillingAccessor()) return undefined
           current = new BillingAttempt(
             served.entry,
             model.provider,
-            options.sessionId ?? this.#ctx.sessionManager.getSessionId(),
+            sessionId,
             'primary',
             model.id,
             receipt,

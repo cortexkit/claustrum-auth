@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test'
 import { createFetch, fixtureEntries } from '../test-entry.ts'
 import { bearer, harness, placeholder, row } from './fakes.ts'
+import { installRoutingAccessor } from './routing-accessor-fixture.ts'
 import { routing } from './routing-fixtures.ts'
-
-const symbol = Symbol.for('cortexkit.routing')
 
 for (const host of ['opencode1', 'pi'] as const) {
   test(`routing ${host}: OAuth-only subscriptions serve without asking routing`, async () => {
@@ -230,7 +229,7 @@ for (const host of ['opencode1', 'pi'] as const) {
         return new Response('ok')
       },
     })
-    Reflect.deleteProperty(globalThis, symbol)
+    installRoutingAccessor()
     await serve('https://fixture.invalid', { headers: bearer })
     expect(sent).toEqual(['Bearer secret-a-1'])
     for (const r of h.consumer.routingRows())
