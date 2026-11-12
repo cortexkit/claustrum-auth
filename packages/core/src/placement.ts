@@ -17,6 +17,8 @@ export type Refusal =
   | 'route-gone'
   | 'vault-mode-off'
   | 'consent-required'
+  | 'routing-declined'
+  | 'routing-no-answer'
 
 export class ClaustrumAuthError extends Error {
   constructor(readonly code: Refusal) {

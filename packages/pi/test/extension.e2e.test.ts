@@ -36,6 +36,30 @@ const consentAsked = (
 setDefaultTimeout(90_000)
 
 describe.skipIf(!e2e)('Pi extension on the real host', () => {
+  for (const [mode, message] of [
+    ['refuse', 'Thalamus routing declined this request, so it was not sent.'],
+    [
+      'never',
+      'Thalamus routing did not answer, so this API key request was not sent.',
+    ],
+  ] as const) {
+    test(`routing ${mode}: fixed refusal reaches user without a provider request`, async () => {
+      const { mock, vault, launch } = await world({
+        rows: [row('a1', 'fixture-a')],
+        pi: { env: { CLAUSTRUM_AUTH_E2E_ROUTING: mode } },
+      })
+      const pi = await launch()
+      await pi.command({ type: 'set_auto_retry', enabled: true })
+      await pi.slash('/claustrum use fixture-a')
+      const result = await pi.turn('fixture-a', 'ok')
+      // The OpenAI SDK wraps the fixed local text in its HTTP error envelope.
+      expect(result.error).toBe(
+        `400: ${JSON.stringify({ message, type: 'claustrum_auth_refused', code: mode === 'refuse' ? 'routing-declined' : 'routing-no-answer' })}`,
+      )
+      expect(mock.seen).toEqual([])
+      expect(vault.reads).toEqual([])
+    })
+  }
   test.skipIf(process.env.CLAUSTRUM_AUTH_SETUP_E2E !== '1')(
     'setup test build enrolls a clean Pi profile and its printed activation asks consent and serves a fixture request',
     async () => {

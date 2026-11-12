@@ -1,6 +1,7 @@
 // The Pi test build: the real extension with fixture providers, loopback
 // origins and a fake vault reached over HTTP. It lives outside src, so neither the published bundle nor npm pack
 // can contain it.
+import '../core/test/routing-preload.ts'
 import { appendFileSync, mkdirSync, rmSync } from 'node:fs'
 import type { ClaustrumScopedClient } from '@cortexkit/common-auth/claustrum'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'

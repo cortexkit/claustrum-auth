@@ -2,6 +2,7 @@ import {
   type AccountLimits,
   type CoreFetch,
   createFetch,
+  hasVaultRoutingAccessor,
   type ProviderEntry,
   type ServingConsumer,
 } from '@cortexkit/claustrum-auth-core'
@@ -59,18 +60,50 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
     init?: RequestInit,
   ) => {
     let shadowed: string | undefined
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    )
+    let modelId = ''
+    const body = init?.body
+    const routed =
+      hasVaultRoutingAccessor() &&
+      headers.get('authorization') ===
+        `Bearer ${placeholderFor(options.provider)}`
+    if (routed && typeof body === 'string') {
+      try {
+        const model: unknown = JSON.parse(body)?.model
+        if (typeof model === 'string') modelId = model
+      } catch {}
+    } else if (routed && input instanceof Request && input.body) {
+      try {
+        const model: unknown = (await input.clone().json())?.model
+        if (typeof model === 'string') modelId = model
+      } catch {}
+    }
     const core = createFetch({
       entry: options.entry,
       placeholder: placeholderFor(options.provider),
       consumer: options.consumer,
       rateLimitMarks,
       limits: options.limits,
+      routing: {
+        sessionId: headers.get('session-id') ?? undefined,
+        provider: options.provider,
+        modelId,
+      },
       // The core passes a request it does not own on with the caller's own
       // arguments; every owned dispatch is a new Request it built.
-      fetch: (next, nextInit) =>
-        next === input && nextInit === init
-          ? previous(next, nextInit)
-          : transport(next, nextInit),
+      fetch: (next, nextInit) => {
+        if (next === input && nextInit === init) {
+          if (!headers.has('session-id')) return previous(next, nextInit)
+          const foreign = new Request(next, nextInit)
+          foreign.headers.delete('session-id')
+          return previous(foreign)
+        }
+        const outbound = new Request(next, nextInit)
+        outbound.headers.delete('session-id')
+        return transport(outbound)
+      },
       async effectiveCredential() {
         shadowed = shadowedVariable(
           (options.env ?? hostEnvironment)(),

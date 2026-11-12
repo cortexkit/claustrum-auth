@@ -14,9 +14,12 @@ import {
   localLimitRetry,
   observeBillingResponse,
   type ProviderEntry,
+  type RoutedKey,
   redactError,
   redactResponse,
+  reportRoutedBalance,
   type ServingConsumer,
+  selectRoutedKey,
   servingCallbacks,
 } from '@cortexkit/claustrum-auth-core'
 import type { ClaustrumScopedAttempt } from '@cortexkit/common-auth/claustrum'
@@ -68,6 +71,8 @@ export interface VaultAttempt {
   frameStatus?: number
   billing?: BillingAttempt
   billingAttempt?: number
+  routed?: RoutedKey
+  balanceReported?: boolean
 }
 
 /** Identifies a session's socket: the host keeps one per session and kind. */
@@ -296,6 +301,7 @@ export function createVaultAdapter(
   >()
   const placeholder = placeholderSecret(options.provider)
   let billingAttempts: Map<string, number> | undefined
+  const routingChoices = new Map<string, RoutedKey>()
   const refuse = (error: unknown) => {
     if (
       error instanceof ClaustrumAuthError &&
@@ -419,6 +425,28 @@ export function createVaultAdapter(
       const selected =
         available.find((row) => row.ready) ??
         (input.phase === 'request' ? available[0] : undefined)
+      try {
+        const excluded = new Set(input.excluded ?? [])
+        if (input.rerouteFrom) excluded.add(input.rerouteFrom.accountId)
+        const routed = await selectRoutedKey(
+          consumer,
+          options.provider,
+          input.modelID,
+          input.sessionID,
+          excluded,
+          selected?.account.accountId,
+        )
+        if (routed) {
+          routingChoices.set(socketKey(input.sessionID, input.kind), routed)
+          if (routingChoices.size > 256) {
+            const oldest = routingChoices.keys().next().value
+            if (oldest !== undefined) routingChoices.delete(oldest)
+          }
+          return routed.routeId
+        }
+      } catch (error) {
+        throw refuse(error)
+      }
       const decision = decideAfterLimit(
         {
           phase: input.phase === 'request' ? 'pre-send' : 'after-limit',
@@ -477,13 +505,19 @@ export function createVaultAdapter(
       // so the plugin's handshake hook checked the origin before this call
       // and left the URL here; only then is the vault read now.
       const key = socketKey(sessionID, kind)
+      const choice = routingChoices.get(key)
+      routingChoices.delete(key)
+      const routed = choice?.routeId === accountId ? choice : undefined
       const hostAttempt = billingAttempts?.get(key)
       billingAttempts?.delete(key)
       const url = options.handshakes?.pending.get(key)
       if (url === undefined)
         return {
           headers: {},
-          attempt: { billingAttempt: hostAttempt } satisfies VaultAttempt,
+          attempt: {
+            billingAttempt: hostAttempt,
+            routed,
+          } satisfies VaultAttempt,
         }
       options.handshakes?.pending.delete(key)
       // The handshake URL has no account segment the plugin could fill.
@@ -492,12 +526,14 @@ export function createVaultAdapter(
       const consumer = await options.consumer()
       if (!consumer) throw new Error(noAccountText(options.provider))
       const limits = await options.limits?.()
-      if (limits && !(await limits.beforeDispatch(accountId)))
+      if (!routed && limits && !(await limits.beforeDispatch(accountId)))
         throw await noAccount()
       const observation = limits?.observe(accountId)
       let receipt: ClaustrumScopedAttempt
       try {
         receipt = await consumer.authorize(accountId)
+        if (routed && receipt.credentialId !== routed.credentialId)
+          throw new ClaustrumAuthError('routing-no-answer')
       } catch (error) {
         throw refuse(error)
       }
@@ -507,6 +543,7 @@ export function createVaultAdapter(
         headers: { authorization: `Bearer ${receipt.accessToken}` },
         attempt: {
           receipt,
+          routed,
           consumer,
           handshakeURL: url,
           limits,
@@ -553,19 +590,22 @@ export function createVaultAdapter(
       if (!consumer) throw new Error(noAccountText(options.provider))
       // Only the chosen account may serve this attempt, so routing inside the
       // shared callbacks sees that one row and no marks.
-      const callbacks = servingCallbacks({
-        entry: options.entry,
-        placeholder,
-        consumer: {
-          routingRows: () =>
-            consumer.routingRows().filter((row) => row.id === accountId),
-          authorize: (route, signal) => consumer.authorize(route, signal),
-          send: (...args) => consumer.send(...args),
-          reportFailure: (...args) => consumer.reportFailure(...args),
+      const callbacks = servingCallbacks(
+        {
+          entry: options.entry,
+          placeholder,
+          consumer: {
+            routingRows: () =>
+              consumer.routingRows().filter((row) => row.id === accountId),
+            authorize: (route, signal) => consumer.authorize(route, signal),
+            send: (...args) => consumer.send(...args),
+            reportFailure: (...args) => consumer.reportFailure(...args),
+          },
+          now,
+          limits: options.limits,
         },
-        now,
-        limits: options.limits,
-      })
+        holder?.routed !== undefined,
+      )
       // In order: placement and origin (no vault read), authorize, the
       // class-B account rewrite from the served receipt, then Authorization.
       let served: Awaited<ReturnType<typeof callbacks.request>>
@@ -579,6 +619,11 @@ export function createVaultAdapter(
         throw refuse(error)
       }
       if (!served) return undefined
+      if (
+        holder?.routed &&
+        served.receipt.credentialId !== holder.routed.credentialId
+      )
+        throw refuse(new ClaustrumAuthError('routing-no-answer'))
       if (holder) {
         holder.receipt = served.receipt
         holder.consumer = consumer
@@ -624,6 +669,16 @@ export function createVaultAdapter(
     },
     async limitFromResponse({ status, headers, body, attempt }) {
       if (attempt.data?.localRefusal) return undefined
+      if (attempt.data?.routed && !attempt.data.balanceReported) {
+        attempt.data.balanceReported = true
+        await reportRoutedBalance(
+          attempt.data.routed,
+          attempt.sessionID,
+          options.entry.service,
+          status,
+          body ?? (async () => ''),
+        )
+      }
       const parsed = await limitFromReply({
         account: attempt.data?.observation?.binding.account ?? {
           namespace: 'claustrum-auth:standalone',

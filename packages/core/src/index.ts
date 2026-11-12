@@ -57,6 +57,15 @@ export {
   reservedProviders,
   supportedProviders,
 } from './providers.js'
+export type { RoutedKey } from './routing.js'
+export {
+  hasVaultRoutingAccessor,
+  reportRoutedBalance,
+  routingDeclinedText,
+  routingNoAnswerText,
+  routingRefusalText,
+  selectRoutedKey,
+} from './routing.js'
 export type { CoreOptions, RosterCore } from './runtime.js'
 export { createCore, unsavedRosterCause } from './runtime.js'
 export type { ServingConsumer, ServingOptions } from './serving.js'

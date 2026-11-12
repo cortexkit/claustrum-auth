@@ -1,4 +1,7 @@
-import { ClaustrumAuthError } from '@cortexkit/claustrum-auth-core'
+import {
+  ClaustrumAuthError,
+  routingRefusalText,
+} from '@cortexkit/claustrum-auth-core'
 import { ClaustrumCredentialError } from '@cortexkit/common-auth/claustrum'
 
 // Every text the OpenCode 2 entry shows is fixed. None of them interpolates
@@ -64,6 +67,8 @@ function refusalText(
   provider: string,
   origins: readonly string[],
 ) {
+  const routing = routingRefusalText(code)
+  if (routing) return routing
   switch (code) {
     case 'origin-refused':
       return originText(provider, origins)

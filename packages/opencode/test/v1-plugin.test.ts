@@ -385,6 +385,20 @@ test('the config hook wraps every listed provider, keeps an earlier fetch and re
   await h.hooks.dispose?.()
 })
 
+test('routing OC1 chat headers stamp only served providers with the host session', async () => {
+  const h = await pluginHarness()
+  for (const providerID of [P, 'openai', 'unknown']) {
+    const output = { headers: {} as Record<string, string> }
+    await h.hooks['chat.headers']?.(
+      { sessionID: 'host-session', model: { providerID } } as never,
+      output,
+    )
+    expect(output.headers).toEqual(
+      providerID === P ? { 'session-id': 'host-session' } : {},
+    )
+  }
+})
+
 test('the command hook runs use and release and ignores other commands', async () => {
   const h = await pluginHarness()
   await h.hooks.config?.({

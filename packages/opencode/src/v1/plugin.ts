@@ -208,6 +208,11 @@ export async function opencode1Hosts(
   }
 
   return {
+    async 'chat.headers'(input, output) {
+      // Carry host identity through the SDK to our fetch, never to a provider.
+      if (listed.has(input.model.providerID))
+        output.headers['session-id'] = input.sessionID
+    },
     async config(config) {
       const commands = (config.command ?? {}) as Record<string, unknown>
       config.command = {

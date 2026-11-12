@@ -521,6 +521,31 @@ const onWire = (run: Scenario, needle: string) =>
   )
 
 describe.skipIf(!ENABLED)('claustrum-auth plugin on real OpenCode 2', () => {
+  for (const [mode, message] of [
+    ['refuse', 'Thalamus routing declined this request, so it was not sent.'],
+    [
+      'never',
+      'Thalamus routing did not answer, so this API key request was not sent.',
+    ],
+  ] as const) {
+    test(`routing ${mode}: fixed refusal reaches user without a provider request`, async () => {
+      await scenario(
+        [{ id: 'a1', providerIds: ['fixture-a'] }],
+        async (run) => {
+          expect((await run.login('fixture-a')).exit).toBe(0)
+          const result = await run.turn('fixture-a')
+          expect(result.output).toContain(message)
+          expect(run.mock.records).toEqual([])
+          expect(run.vault.reads).toEqual([])
+        },
+        {
+          beforeStart: async (run) => {
+            run.env.CLAUSTRUM_AUTH_E2E_ROUTING = mode
+          },
+        },
+      )
+    })
+  }
   test('billing: a real vault-served HTTP turn reports completed provider usage', async () => {
     await scenario(
       [{ id: 'apikey:cerebras', providerIds: ['cerebras'] }],

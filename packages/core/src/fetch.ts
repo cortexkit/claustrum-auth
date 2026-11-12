@@ -19,6 +19,7 @@ import {
   redactError,
   redactResponse,
 } from './placement.js'
+import { reportRoutedBalance, selectRoutedKey } from './routing.js'
 import { placeReceipt, type ServingOptions } from './serving.js'
 
 export const maxBodyBytes = 64 * 1024 * 1024
@@ -33,6 +34,7 @@ export interface FetchOptions extends ServingOptions {
   // case rules and config precedence. The check is repeated on every request.
   effectiveCredential?: () => boolean | Promise<boolean>
   billing?: (receipt: ClaustrumScopedAttempt) => BillingAttempt | undefined
+  routing?: { sessionId: string | undefined; provider: string; modelId: string }
 }
 
 async function bufferBody(request: Request): Promise<Uint8Array | undefined> {
@@ -101,6 +103,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
       cache: request.cache,
     }
     const tried = new Set<string>()
+    let routedAttempt = false
     const rejected = new Set<string>()
     const secrets: string[] = []
     let redirectBilling:
@@ -191,12 +194,10 @@ export function createFetch(options: FetchOptions): CoreFetch {
     try {
       for (;;) {
         signal.throwIfAborted()
+        if (routedAttempt && pending && !pending.parsed)
+          return await redactResponse(pending.response, secrets)
         const rows = await candidates()
-        if (!pending && !rows.some((row) => row.admitted))
-          throw new ClaustrumAuthError('no-vault-account')
-        // A failed provider response stays readable until a replacement send
-        // is committed. Reloads must not turn it into a fresh-request refusal.
-        const initial = pending
+        const ownDecision = pending
           ? decide(
               'after-limit',
               rows,
@@ -205,6 +206,39 @@ export function createFetch(options: FetchOptions): CoreFetch {
               pending.parsed,
             )
           : decide('pre-send', rows)
+        if (ownDecision.action === 'pass' && pending)
+          return await redactResponse(pending.response, secrets)
+        const nextRoute =
+          ownDecision.action === 'reroute'
+            ? ownDecision.account.accountId
+            : rows.find((row) => row.admitted && row.placementEligible)?.account
+                .accountId
+        let routed = await selectRoutedKey(
+          options.consumer,
+          options.routing?.provider ?? options.entry.service,
+          options.routing?.modelId ?? '',
+          options.routing?.sessionId,
+          new Set([...tried, ...rejected]),
+          nextRoute,
+        )
+        routedAttempt = routed !== undefined
+        const routedId = routed?.routeId
+        if (!pending && !rows.some((row) => row.admitted))
+          throw new ClaustrumAuthError('no-vault-account')
+        // Keep a failed provider response readable until a replacement send
+        // is committed, so a vault roster reload cannot turn a retry into a
+        // fresh-request refusal instead of returning the provider's response.
+        const initial = routed
+          ? {
+              action: 'reroute' as const,
+              account: rows.find((row) => row.account.accountId === routedId)
+                ?.account ?? {
+                namespace: 'claustrum-auth:routing',
+                accountId: routed.routeId,
+                incarnation: 'routing',
+              },
+            }
+          : ownDecision
         if (initial.action === 'pass' && pending)
           return await redactResponse(pending.response, secrets)
         if (initial.action === 'refuse') {
@@ -213,12 +247,12 @@ export function createFetch(options: FetchOptions): CoreFetch {
         }
         if (initial.action !== 'reroute')
           throw new Error('claustrum-auth: unsupported limit action')
-        const route = initial.account.accountId
-        if (limits && !(await limits.beforeDispatch(route))) {
+        let route = initial.account.accountId
+        if (!routed && limits && !(await limits.beforeDispatch(route))) {
           rejected.add(route)
           continue
         }
-        if (limits) {
+        if (!routed && limits) {
           if (
             !(await candidates()).find((row) => row.account.accountId === route)
               ?.ready
@@ -229,7 +263,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
         pending = undefined
         tried.add(route)
         const previousMark = rateLimitMarks.get(route)
-        const observation = limits?.observe(route)
+        let observation = limits?.observe(route)
         let target = url
         let method = template.method
         let bytes = body
@@ -238,54 +272,76 @@ export function createFetch(options: FetchOptions): CoreFetch {
         for (;;) {
           signal.throwIfAborted()
           checkOrigin(target, options.entry)
-          response = await options.consumer.send(
-            route,
-            async (receipt, dispatchSignal) => {
-              secrets.push(receipt.accessToken)
-              const draft = placeReceipt(
-                target,
-                headers,
-                options.entry,
-                receipt,
-              )
-              const dispatchHeaders = new Headers(draft.headers)
-              if (!bytes) {
-                dispatchHeaders.delete('content-length')
-                if (method !== template.method)
-                  dispatchHeaders.delete('content-type')
+          if (redirects > 0 && routed) {
+            routed = await selectRoutedKey(
+              options.consumer,
+              options.routing?.provider ?? options.entry.service,
+              options.routing?.modelId ?? '',
+              options.routing?.sessionId,
+              new Set([...tried].filter((id) => id !== route)),
+            )
+            if (!routed) throw new ClaustrumAuthError('routing-no-answer')
+            route = routed.routeId
+            tried.add(route)
+            observation = limits?.observe(route)
+          }
+          const dispatch = async (
+            receipt: ClaustrumScopedAttempt,
+            dispatchSignal?: AbortSignal,
+          ) => {
+            secrets.push(receipt.accessToken)
+            const draft = placeReceipt(target, headers, options.entry, receipt)
+            const dispatchHeaders = new Headers(draft.headers)
+            if (!bytes) {
+              dispatchHeaders.delete('content-length')
+              if (method !== template.method)
+                dispatchHeaders.delete('content-type')
+            }
+            const outbound = new Request(draft.url, {
+              method,
+              headers: dispatchHeaders,
+              body: bytes ? new Uint8Array(bytes) : undefined,
+              signal: dispatchSignal ?? signal,
+              redirect: 'manual',
+              credentials: template.credentials,
+              cache: template.cache,
+            })
+            let billing: BillingAttempt | undefined
+            try {
+              const reply = await options.fetch(outbound)
+              if (
+                options.billing &&
+                [301, 302, 303, 307, 308].includes(reply.status) &&
+                reply.headers.has('location')
+              ) {
+                // A followed redirect is a routing hop, not a billable model
+                // call. Wait until the redirect checks decide to return it.
+                redirectBilling = { receipt, status: reply.status }
+                return reply
               }
-              const outbound = new Request(draft.url, {
-                method,
-                headers: dispatchHeaders,
-                body: bytes ? new Uint8Array(bytes) : undefined,
-                signal: dispatchSignal ?? signal,
-                redirect: 'manual',
-                credentials: template.credentials,
-                cache: template.cache,
-              })
-              let billing: BillingAttempt | undefined
-              try {
-                const reply = await options.fetch(outbound)
-                if (
-                  options.billing &&
-                  [301, 302, 303, 307, 308].includes(reply.status) &&
-                  reply.headers.has('location')
-                ) {
-                  // A followed redirect is a routing hop, not a billable model
-                  // call. Wait until the redirect checks decide to return it.
-                  redirectBilling = { receipt, status: reply.status }
-                  return reply
-                }
-                billing = options.billing?.(receipt)
-                return observeBillingResponse(billing, reply)
-              } catch (error) {
-                const failedBilling = billing ?? options.billing?.(receipt)
-                failedBilling?.end(false, false)
-                throw error
-              }
-            },
-            { site: 'claustrum-auth', signal },
-          )
+              billing = options.billing?.(receipt)
+              return observeBillingResponse(billing, reply)
+            } catch (error) {
+              const failedBilling = billing ?? options.billing?.(receipt)
+              failedBilling?.end(false, false)
+              throw error
+            }
+          }
+          if (routed) {
+            // Consumer.send can rotate and resend a 401 on its own. Routing
+            // owns paid-key admission, so authorize exactly one physical send.
+            const receipt = await options.consumer.authorize(route, signal)
+            if (receipt.credentialId !== routed.credentialId)
+              throw new ClaustrumAuthError('routing-no-answer')
+            response = await dispatch(receipt, signal)
+            if (response.status === 401)
+              await options.consumer.reportFailure(receipt, 401, 'direct')
+          } else {
+            response = await options.consumer.send(route, dispatch, {
+              site: 'claustrum-auth',
+              signal,
+            })
+          }
           signal.throwIfAborted()
           const location = response.headers.get('location')
           if (![301, 302, 303, 307, 308].includes(response.status) || !location)
@@ -322,8 +378,12 @@ export function createFetch(options: FetchOptions): CoreFetch {
           redirectBilling = undefined
           response = observeBillingResponse(billing, response)
         }
+        const account = observation?.binding.account ?? {
+          ...initial.account,
+          accountId: route,
+        }
         const parsed = await limitFromReply({
-          account: observation?.binding.account ?? initial.account,
+          account,
           service: options.entry.service,
           status: response.status,
           headers: response.headers,
@@ -331,6 +391,13 @@ export function createFetch(options: FetchOptions): CoreFetch {
           now: now(),
         })
         const balance402 = parsed?.kind === 'payment-balance'
+        await reportRoutedBalance(
+          routed,
+          options.routing?.sessionId,
+          options.entry.service,
+          response.status,
+          () => response.clone().text(),
+        )
         if (response.ok || (response.status === 402 && !balance402)) {
           if (limits && observation) {
             if (
@@ -360,7 +427,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
         }
         pending = {
           response,
-          account: observation?.binding.account ?? initial.account,
+          account,
           parsed,
         }
       }

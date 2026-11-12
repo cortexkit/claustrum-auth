@@ -1,4 +1,4 @@
-import { command } from '@cortexkit/claustrum-auth-core'
+import { command, routingRefusalText } from '@cortexkit/claustrum-auth-core'
 import type { EffectiveCredential } from './effective.js'
 
 // Removal commands for the platform the host runs on. The plugin cannot tell
@@ -47,6 +47,8 @@ export function userCredentialMessage(
 // Fixed text for each local refusal. Nothing here interpolates request data,
 // so a message can never echo a header, URL or served secret.
 export function refusalMessage(code: string, provider: string): string {
+  const routing = routingRefusalText(code)
+  if (routing) return routing
   switch (code) {
     case 'placement-refused':
       return `claustrum-auth: this model's driver sends its key for ${provider} outside the Authorization header; the claustrum-auth plugin only serves keys sent in Authorization.`

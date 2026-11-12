@@ -1,4 +1,8 @@
-import { command, type ProviderEntry } from '@cortexkit/claustrum-auth-core'
+import {
+  command,
+  type ProviderEntry,
+  routingRefusalText,
+} from '@cortexkit/claustrum-auth-core'
 
 // Every text here is fixed: it names the provider and its allowed origins from
 // the plugin's own table, never anything taken from a request or a vault reply.
@@ -10,6 +14,8 @@ export function refusalText(
   provider: string,
   entry: ProviderEntry,
 ): string {
+  const routing = routingRefusalText(code)
+  if (routing) return routing
   switch (code) {
     case 'placement-refused':
       return `${refused} this model's request carries the ${provider} vault placeholder outside the Authorization header, and vault keys are only sent as Authorization: Bearer. ${nothingSent}`

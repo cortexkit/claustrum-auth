@@ -209,6 +209,11 @@ test.each(['terminal-redirect', 'transport-error', 'redirect-limit'] as const)(
       entry,
       placeholder,
       consumer: h.consumer,
+      routing: {
+        sessionId: 'session',
+        provider: 'fixture-a',
+        modelId: 'sent-model',
+      },
       billing: (receipt) =>
         new BillingAttempt(
           entry,

@@ -98,3 +98,20 @@ vault reachability, provider ownership and the accounts available for routing.
 Use `/claustrum refusals` for rows the plugin cannot serve. See
 [provider metadata](providers.md#the-operators-vault-rows) if a row is refused
 despite a successful grant.
+
+## Thalamus routing
+
+When Thalamus supplies its routing accessor and the plugin's next row is an
+API key, routing chooses that request's vault API key, including for titles,
+compaction and retries, from the enabled
+accounts for that provider. The plugin never substitutes its own choice. A
+routing refusal stops the request with "Thalamus routing declined this request,
+so it was not sent." No answer stops it with "Thalamus routing did not answer,
+so this API key request was not sent." Slow routing (over 1.5 seconds) counts
+as no answer and stops the API-key request too. Documented empty-balance
+refusals are reported back to routing; user-set spending caps are not.
+Outside Thalamus, without its accessor, account selection is unchanged.
+
+Subscription (OAuth) rows are not routed yet. If the plugin's usual next row
+is an OAuth login, it serves that login as before without asking routing; only
+an API-key attempt asks routing to choose among eligible API keys.

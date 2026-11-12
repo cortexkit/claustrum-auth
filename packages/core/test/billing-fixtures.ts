@@ -7,7 +7,12 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, symbol)
 })
 
-export function captureBilling(keepWarm = false) {
+export function captureBilling(
+  keepWarm = false,
+  accountFor = async ({ provider }: { provider: string }) => ({
+    account_id: provider === 'fixture-a' ? 'account-a' : 'account-1',
+  }),
+) {
   const reports: Record<string, unknown>[] = []
   const sessions: string[] = []
   Object.defineProperty(globalThis, symbol, {
@@ -15,6 +20,7 @@ export function captureBilling(keepWarm = false) {
     value: (session: string) => {
       sessions.push(session)
       return {
+        accountFor,
         report: (report: Record<string, unknown>) => {
           reports.push(report)
         },

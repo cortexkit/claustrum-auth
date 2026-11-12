@@ -12,6 +12,7 @@ import {
 } from '../../core/test/billing-fixtures.ts'
 import { vaultRowFor } from '../../core/test/fakes.ts'
 import { installVaultHost } from '../../core/test/host.ts'
+import { routing } from '../../core/test/routing-fixtures.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
 import { agentDir } from './harness.ts'
@@ -23,6 +24,7 @@ async function turn(
   redirect = false,
   onSemantics?: () => void,
   onReady?: () => void,
+  routingExpectation: { second?: boolean; refusal?: string } = {},
 ) {
   const base = supportedProviders.find((row) => row.service === provider)
   if (!base?.billing) throw new Error('missing provider')
@@ -39,7 +41,7 @@ async function turn(
     : base
   const rows = [
     vaultRowFor(entry, { accountId: 'account-1' }),
-    ...(retry
+    ...(retry || routingExpectation.second
       ? [
           vaultRowFor(entry, {
             id: `apikey:${provider}:second`,
@@ -109,6 +111,7 @@ async function turn(
     ) => AssistantMessageEventStream
     if (!stream) throw new Error('missing registered stream')
     let sends = 0
+    let requests = 0
     let includeUsage: unknown
     const reply = stream(
       {
@@ -128,12 +131,13 @@ async function turn(
         sessionId: 'pi-session',
         apiKey: ownKey ? 'user-key' : placeholderKey(provider),
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          requests++
           const request = new Request(input, init)
           includeUsage = (await request.json()).stream_options
           expect(request.headers.get('authorization')).toBe(
             ownKey
               ? 'Bearer user-key'
-              : `Bearer secret-apikey:${provider}${retry && sends > 0 ? ':second' : ''}-1`,
+              : `Bearer secret-apikey:${provider}${routingExpectation.second || (retry && sends > 0) ? ':second' : ''}-1`,
           )
           if (retry && ++sends === 1)
             return new Response('busy', {
@@ -152,6 +156,12 @@ async function turn(
     for await (const _event of reply) {
     }
     const message = await reply.result()
+    if (routingExpectation.refusal) {
+      expect(message.stopReason).toBe('error')
+      expect(message.errorMessage).toContain(routingExpectation.refusal)
+      expect(requests).toBe(0)
+      return message
+    }
     expect(message.stopReason).toBe('stop')
     expect(includeUsage).toEqual({ include_usage: true })
     return message
@@ -206,8 +216,36 @@ test('Pi leaves a user key unbilled even when the routing accessor is installed'
   expect(reports).toEqual([])
 })
 
+test('Pi routing selection serves the second vault key rather than roster first', async () => {
+  captureBilling(false, async () => ({ account_id: 'account-2' }))
+  await turn('deepseek', false, false, false, undefined, undefined, {
+    second: true,
+  })
+})
+
+test('Pi routing refusal and no answer stop before the transport', async () => {
+  for (const [answer, refusal] of [
+    [
+      { refused: { code: 'account_selection_final' } },
+      'Thalamus routing declined this request, so it was not sent.',
+    ],
+    [
+      undefined,
+      'Thalamus routing did not answer, so this API key request was not sent.',
+    ],
+  ] as const) {
+    routing(async () => answer)
+    await turn('deepseek', false, false, false, undefined, undefined, {
+      refusal,
+    })
+  }
+})
+
 test('Pi reroute bills both physical sends with different UUIDs and attempts', async () => {
-  const { reports } = captureBilling()
+  let choices = 0
+  const { reports } = captureBilling(false, async () => ({
+    account_id: `account-${++choices}`,
+  }))
   await turn('deepseek', false, true)
   expect(reports).toHaveLength(2)
   expect(

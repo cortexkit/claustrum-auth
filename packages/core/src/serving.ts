@@ -16,7 +16,8 @@ import type { ProviderEntry } from './providers.js'
 export type ServingConsumer = Pick<
   ClaustrumConsumer,
   'routingRows' | 'authorize' | 'send' | 'reportFailure'
->
+> &
+  Partial<Pick<ClaustrumConsumer, 'snapshot'>>
 export interface ServingOptions {
   entry: ProviderEntry
   placeholder: string
@@ -56,7 +57,10 @@ export function placeReceipt(
 // Host-independent callbacks for the OpenCode 2 adapter. The returned holder
 // retains the issuing receipt, so a response cannot be attributed to a row
 // merely because it shares a provider or session with an owned request.
-export function servingCallbacks(options: ServingOptions) {
+export function servingCallbacks(
+  options: ServingOptions,
+  routingAdmitted = false,
+) {
   return {
     async request(url: URL, headers: Headers, signal?: AbortSignal) {
       if (
@@ -67,7 +71,7 @@ export function servingCallbacks(options: ServingOptions) {
       const route = orderedRoutes(options)[0]
       if (!route) throw new ClaustrumAuthError('no-vault-account')
       const limits = await options.limits?.()
-      if (limits && !(await limits.beforeDispatch(route)))
+      if (!routingAdmitted && limits && !(await limits.beforeDispatch(route)))
         throw new ClaustrumAuthError('no-vault-account')
       const observation = limits?.observe(route)
       const receipt = await options.consumer.authorize(route, signal)

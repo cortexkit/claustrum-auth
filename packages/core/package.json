@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@cortexkit/claustrum-client": "^0.18.0",
-    "@cortexkit/common-auth": "^0.44.0",
+    "@cortexkit/common-auth": "^0.47.0",
     "@cortexkit/private-files": "^0.2.2",
     "@cortexkit/subc-client": "^0.24.0"
   }

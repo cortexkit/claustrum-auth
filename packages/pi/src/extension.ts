@@ -331,31 +331,46 @@ class PiRuntime {
     // runtime override goes to pi-ai exactly as Pi resolved it.
     if (options?.apiKey !== served.placeholder)
       return streamSimple(model, context, options)
+    const routing = {
+      sessionId: options.sessionId ?? this.#ctx.sessionManager.getSessionId(),
+      provider: model.provider,
+      modelId: model.id,
+    }
     const inner = (options.fetch ?? globalThis.fetch) as CoreFetch
     if (!hasBillingAccessor())
       return streamSimple(model, context, {
         ...options,
-        fetch: this.ownedFetch(served, inner) as typeof fetch,
+        fetch: this.ownedFetch(
+          served,
+          inner,
+          undefined,
+          routing,
+        ) as typeof fetch,
       })
     let current: BillingAttempt | undefined
     let attempt = 0
     const stream = streamSimple(model, context, {
       ...options,
-      fetch: this.ownedFetch(served, inner, (receipt) => {
-        current?.end()
-        if (!hasBillingAccessor()) return undefined
-        current = new BillingAttempt(
-          served.entry,
-          model.provider,
-          options.sessionId ?? this.#ctx.sessionManager.getSessionId(),
-          'primary',
-          model.id,
-          receipt,
-          ++attempt,
-          true,
-        )
-        return current
-      }) as typeof fetch,
+      fetch: this.ownedFetch(
+        served,
+        inner,
+        (receipt) => {
+          current?.end()
+          if (!hasBillingAccessor()) return undefined
+          current = new BillingAttempt(
+            served.entry,
+            model.provider,
+            options.sessionId ?? this.#ctx.sessionManager.getSessionId(),
+            'primary',
+            model.id,
+            receipt,
+            ++attempt,
+            true,
+          )
+          return current
+        },
+        routing,
+      ) as typeof fetch,
     })
     void stream.result().then(
       (message) => current?.piEnd(message.responseId, message.stopReason),
@@ -368,6 +383,7 @@ class PiRuntime {
     served: Served,
     inner: CoreFetch,
     billing?: Parameters<typeof createFetch>[0]['billing'],
+    routing?: Parameters<typeof createFetch>[0]['routing'],
   ): CoreFetch {
     const serve = createFetch({
       entry: served.entry,
@@ -378,6 +394,7 @@ class PiRuntime {
       rateLimitMarks: served.marks,
       limits: () => this.#core.limits(served.provider),
       billing,
+      routing,
     })
     return async (input, init) => {
       try {
