@@ -89,14 +89,8 @@ export async function reportRoutedBalance(
   if (!key || !sessionId || status !== 402) return
   const text = await body().catch(() => '')
   if (!isBalanceFailure(service, text)) return
-  let providerCode =
+  const providerCode =
     service === 'openrouter' ? 'openrouter_credits' : 'http_402'
-  if (service === 'deepseek') {
-    try {
-      const code: unknown = JSON.parse(text)?.error?.code
-      if (typeof code === 'string') providerCode = code
-    } catch {}
-  }
   reportRouting({
     sessionId,
     accountId: key.accountId,

@@ -138,9 +138,9 @@ test('routing candidates exclude user-disabled rows OAuth and other providers', 
   expect(sends).toBe(0)
 })
 
-test('routing rechecks each redirect and never rotates a 401 behind routing', async () => {
+test('routing keeps one admitted key across same-origin redirect hops', async () => {
   const h = await harness()
-  let sends = 0
+  const sent: Request[] = []
   const { calls } = routing(async (call) =>
     call === 1
       ? { account_id: 'account-a' }
@@ -151,34 +151,62 @@ test('routing rechecks each redirect and never rotates a 401 behind routing', as
     placeholder,
     consumer: h.consumer,
     routing: { sessionId: 'session', provider: 'fixture-a', modelId: 'model' },
-    fetch: async () => {
-      sends++
-      return new Response(null, { status: 307, headers: { location: '/next' } })
-    },
-  })
-  await expect(
-    serve('https://fixture.invalid', { headers: bearer }),
-  ).rejects.toMatchObject({ code: 'routing-declined' })
-  expect(calls).toHaveLength(2)
-  expect(sends).toBe(1)
-  routing(async () => ({ account_id: 'account-a' }))
-  const authFailure = createFetch({
-    entry: fixtureEntries[0],
-    placeholder,
-    consumer: h.consumer,
-    routing: { sessionId: 'session', provider: 'fixture-a', modelId: 'model' },
-    fetch: async () => {
-      sends++
-      return new Response('bad key', { status: 401 })
+    fetch: async (input) => {
+      sent.push(new Request(input))
+      return sent.length === 1
+        ? new Response(null, { status: 307, headers: { location: '/next' } })
+        : new Response('done')
     },
   })
   expect(
-    (await authFailure('https://fixture.invalid', { headers: bearer })).status,
-  ).toBe(401)
-  expect(sends).toBe(2)
+    await (await serve('https://fixture.invalid', { headers: bearer })).text(),
+  ).toBe('done')
+  expect(sent.map((request) => request.url)).toEqual([
+    'https://fixture.invalid/',
+    'https://fixture.invalid/next',
+  ])
+  expect(sent.map((request) => request.headers.get('authorization'))).toEqual([
+    'Bearer secret-a-1',
+    'Bearer secret-a-1',
+  ])
+  expect(calls).toHaveLength(1)
 })
 
 for (const host of ['opencode1', 'pi'] as const) {
+  test(`routing ${host}: 401 rotation retries the same credential without asking again`, async () => {
+    const h = await harness([row('a'), row('b')], host)
+    const { calls } = routing(async () => ({ account_id: 'account-b' }))
+    const sent: string[] = []
+    const serve = createFetch({
+      entry: fixtureEntries[0],
+      placeholder,
+      consumer: h.consumer,
+      host,
+      routing: {
+        sessionId: 'session',
+        provider: 'fixture-a',
+        modelId: 'model',
+      },
+      fetch: async (input) => {
+        sent.push(new Request(input).headers.get('authorization') ?? '')
+        if (sent.length === 1) {
+          h.setVersion(2)
+          return new Response('old key', { status: 401 })
+        }
+        return new Response('done')
+      },
+    })
+    expect(
+      await (
+        await serve('https://fixture.invalid', { headers: bearer })
+      ).text(),
+    ).toBe('done')
+    expect(sent).toEqual(['Bearer secret-b-1', 'Bearer secret-b-2'])
+    expect(h.reads).toEqual(['b', 'b'])
+    expect(h.reports).toEqual([])
+    expect(calls).toHaveLength(1)
+  })
+
   test(`routing ${host}: selection overrides roster and local marks; no accessor keeps today's choice`, async () => {
     const h = await harness(
       [row('a', { accountId: undefined }), row('b', { accountId: undefined })],
@@ -289,7 +317,7 @@ for (const host of ['opencode1', 'pi'] as const) {
 test('routing reports only qualifying balance refusals with vault identities and provider codes', async () => {
   for (const [service, status, body, code] of [
     ['deepseek', 402, '{}', 'http_402'],
-    ['deepseek', 402, '{"error":{"code":"balance_empty"}}', 'balance_empty'],
+    ['deepseek', 402, '{"error":{"code":"request_failed"}}', 'http_402'],
     [
       'openrouter',
       402,

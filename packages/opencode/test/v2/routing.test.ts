@@ -166,6 +166,7 @@ test('routing OC2 retry excludes earlier keys and asks again', async () => {
 test('routing OC2 balance reports once and never for auth rate limits or self-set caps', async () => {
   for (const [service, status, body, code] of [
     ['deepseek', 402, '{}', 'http_402'],
+    ['deepseek', 402, '{"error":{"code":"request_failed"}}', 'http_402'],
     [
       'openrouter',
       402,

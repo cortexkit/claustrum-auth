@@ -213,7 +213,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
             ? ownDecision.account.accountId
             : rows.find((row) => row.admitted && row.placementEligible)?.account
                 .accountId
-        let routed = await selectRoutedKey(
+        const routed = await selectRoutedKey(
           options.consumer,
           options.routing?.provider ?? options.entry.service,
           options.routing?.modelId ?? '',
@@ -247,7 +247,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
         }
         if (initial.action !== 'reroute')
           throw new Error('claustrum-auth: unsupported limit action')
-        let route = initial.account.accountId
+        const route = initial.account.accountId
         if (!routed && limits && !(await limits.beforeDispatch(route))) {
           rejected.add(route)
           continue
@@ -263,7 +263,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
         pending = undefined
         tried.add(route)
         const previousMark = rateLimitMarks.get(route)
-        let observation = limits?.observe(route)
+        const observation = limits?.observe(route)
         let target = url
         let method = template.method
         let bytes = body
@@ -272,23 +272,12 @@ export function createFetch(options: FetchOptions): CoreFetch {
         for (;;) {
           signal.throwIfAborted()
           checkOrigin(target, options.entry)
-          if (redirects > 0 && routed) {
-            routed = await selectRoutedKey(
-              options.consumer,
-              options.routing?.provider ?? options.entry.service,
-              options.routing?.modelId ?? '',
-              options.routing?.sessionId,
-              new Set([...tried].filter((id) => id !== route)),
-            )
-            if (!routed) throw new ClaustrumAuthError('routing-no-answer')
-            route = routed.routeId
-            tried.add(route)
-            observation = limits?.observe(route)
-          }
           const dispatch = async (
             receipt: ClaustrumScopedAttempt,
             dispatchSignal?: AbortSignal,
           ) => {
+            if (routed && receipt.credentialId !== routed.credentialId)
+              throw new ClaustrumAuthError('routing-no-answer')
             secrets.push(receipt.accessToken)
             const draft = placeReceipt(target, headers, options.entry, receipt)
             const dispatchHeaders = new Headers(draft.headers)
@@ -327,21 +316,10 @@ export function createFetch(options: FetchOptions): CoreFetch {
               throw error
             }
           }
-          if (routed) {
-            // Consumer.send can rotate and resend a 401 on its own. Routing
-            // owns paid-key admission, so authorize exactly one physical send.
-            const receipt = await options.consumer.authorize(route, signal)
-            if (receipt.credentialId !== routed.credentialId)
-              throw new ClaustrumAuthError('routing-no-answer')
-            response = await dispatch(receipt, signal)
-            if (response.status === 401)
-              await options.consumer.reportFailure(receipt, 401, 'direct')
-          } else {
-            response = await options.consumer.send(route, dispatch, {
-              site: 'claustrum-auth',
-              signal,
-            })
-          }
+          response = await options.consumer.send(route, dispatch, {
+            site: 'claustrum-auth',
+            signal,
+          })
           signal.throwIfAborted()
           const location = response.headers.get('location')
           if (![301, 302, 303, 307, 308].includes(response.status) || !location)

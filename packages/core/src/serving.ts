@@ -59,6 +59,9 @@ export function placeReceipt(
 // merely because it shares a provider or session with an owned request.
 export function servingCallbacks(
   options: ServingOptions,
+  // Routing owns cooldown decisions for admitted API keys, so skip the
+  // plugin's rate-limit and balance cooldowns.
+  // Vault authorization and the user's on/off switch still apply.
   routingAdmitted = false,
 ) {
   return {
