@@ -10,6 +10,7 @@ import {
 } from '@cortexkit/common-auth/limits'
 import { hasBalanceRule } from './balance.js'
 import { type BillingAttempt, observeBillingResponse } from './billing.js'
+import { waitForFirstRoster } from './first-roster.js'
 import { limitFromReply, limitRefusal } from './limits.js'
 import {
   ClaustrumAuthError,
@@ -96,6 +97,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
     // (Node's undici) `new Request(request, { body: null })` takes the body
     // over instead of dropping it, so no request is derived from this one.
     const body = await bufferBody(request)
+    await waitForFirstRoster(options.consumer, signal)
     const limits = options.limits ? await options.limits() : undefined
     const template = {
       method: request.method,

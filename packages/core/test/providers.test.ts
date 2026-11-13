@@ -19,7 +19,14 @@ import {
   supportedProviders,
   tableByService,
 } from '../test-entry.ts'
-import { bearer, liveHarness, placeholder, row } from './fakes.ts'
+import {
+  bearer,
+  liveHarness,
+  placeholder,
+  row,
+  withProviderHarness,
+} from './fakes.ts'
+import { withTestTiming } from './phase-timing.ts'
 
 type Outcome =
   | { kind: 'mine'; member: string }
@@ -579,68 +586,70 @@ for (const host of hosts) {
   for (const item of vaultRows) {
     const outcome = item.expected(host)
     if (outcome.kind !== 'mine') continue
-    test(`a shipped provider serves its vault row only to its documented origin (${host}: ${outcome.member})`, async () => {
-      const rows = vaultRows.flatMap((item) =>
-        item.expected(host).kind === 'mine'
-          ? [
-              row(item.credential, {
-                providerIds: item.providerIds,
-                credentialType: item.credentialType ?? 'apikey',
-                authMethod:
-                  item.credentialType === 'oauth' ? 'oauth' : 'apikey',
-                ...(item.credentialType === 'oauth'
-                  ? { refreshAdapter: item.providerIds[0] }
-                  : {}),
-                categories: [...(item.categories ?? ['llm-provider'])],
-                accountId: `account-${item.credential}`,
-              }),
-            ]
-          : [],
-      )
-      const h = await liveHarness(rows, host)
-      const entry = supportedProviders.find(
-        (candidate) => candidate.hosts[host] === outcome.member,
-      )
-      if (!entry) throw new Error(`no entry for ${outcome.member}`)
-      const consumer = h.consumers.get(outcome.member)
-      if (!consumer) throw new Error(`no ${outcome.member} member on ${host}`)
-      // The provider's own origin is served with the row's key.
-      let reached = ''
-      const fetch = createFetch({
-        entry,
-        placeholder,
-        consumer,
-        fetch: async (input) => {
-          reached = (input as Request).headers.get('authorization') ?? ''
-          return new Response('ok')
-        },
-      })
-      const allowed = new URL(entry.origins[0] as string)
-      expect(
-        await (
-          await fetch(new URL('/v1/chat/completions', allowed).href, {
-            headers: bearer,
-          })
-        ).text(),
-      ).toBe('ok')
-      expect(reached).toBe(`Bearer ${h.secretOf(item.credential)}`)
-      // A lookalike host, or the provider's API host on another port or scheme,
-      // is refused before the vault is read and never sees a request.
-      const reads = h.reads.length
-      for (const lookalike of [
-        `${allowed.protocol}//${allowed.hostname}.example`,
-        `${allowed.protocol}//${allowed.hostname}:8443`,
-        `https://${allowed.hostname.split('.').slice(1).join('.')}`,
-      ]) {
-        await expect(
-          fetch(new URL('/v1/chat/completions', lookalike).href, {
-            headers: bearer,
+    const name = `a shipped provider serves its vault row only to its documented origin (${host}: ${outcome.member})`
+    test(name, () =>
+      withTestTiming(name, async () => {
+        const rows = [
+          row(item.credential, {
+            providerIds: item.providerIds,
+            credentialType: item.credentialType ?? 'apikey',
+            authMethod: item.credentialType === 'oauth' ? 'oauth' : 'apikey',
+            ...(item.credentialType === 'oauth'
+              ? { refreshAdapter: item.providerIds[0] }
+              : {}),
+            categories: [...(item.categories ?? ['llm-provider'])],
+            accountId: `account-${item.credential}`,
           }),
-        ).rejects.toMatchObject({ code: 'origin-refused' })
-      }
-      expect(h.reads).toHaveLength(reads)
-      expect(reached).toBe(`Bearer ${h.secretOf(item.credential)}`)
-    })
+        ]
+        const entry = supportedProviders.find(
+          (candidate) => candidate.hosts[host] === outcome.member,
+        )
+        if (!entry) throw new Error(`no entry for ${outcome.member}`)
+        await withProviderHarness(rows, host, entry, async (h, signal) => {
+          const consumer = h.consumers.get(outcome.member)
+          if (!consumer)
+            throw new Error(`no ${outcome.member} member on ${host}`)
+          // The provider's own origin is served with the row's key.
+          let reached = ''
+          const fetch = createFetch({
+            entry,
+            placeholder,
+            consumer,
+            fetch: async (input) => {
+              reached = (input as Request).headers.get('authorization') ?? ''
+              return new Response('ok')
+            },
+          })
+          const allowed = new URL(entry.origins[0] as string)
+          expect(
+            await (
+              await fetch(new URL('/v1/chat/completions', allowed).href, {
+                headers: bearer,
+                signal,
+              })
+            ).text(),
+          ).toBe('ok')
+          expect(reached).toBe(`Bearer ${h.secretOf(item.credential)}`)
+          // A lookalike host, or the provider's API host on another port or scheme,
+          // is refused before the vault is read and never sees a request.
+          const reads = h.reads.length
+          for (const lookalike of [
+            `${allowed.protocol}//${allowed.hostname}.example`,
+            `${allowed.protocol}//${allowed.hostname}:8443`,
+            `https://${allowed.hostname.split('.').slice(1).join('.')}`,
+          ]) {
+            await expect(
+              fetch(new URL('/v1/chat/completions', lookalike).href, {
+                headers: bearer,
+                signal,
+              }),
+            ).rejects.toMatchObject({ code: 'origin-refused' })
+          }
+          expect(h.reads).toHaveLength(reads)
+          expect(reached).toBe(`Bearer ${h.secretOf(item.credential)}`)
+        })
+      }),
+    )
   }
 }
 

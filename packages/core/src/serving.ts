@@ -3,6 +3,7 @@ import type {
   ClaustrumScopedAttempt,
 } from '@cortexkit/common-auth/claustrum'
 import { routeOrdered } from '@cortexkit/common-auth/routing'
+import { waitForFirstRoster } from './first-roster.js'
 import type { AccountLimits } from './limits.js'
 import {
   ClaustrumAuthError,
@@ -17,7 +18,7 @@ export type ServingConsumer = Pick<
   ClaustrumConsumer,
   'routingRows' | 'authorize' | 'send' | 'reportFailure'
 > &
-  Partial<Pick<ClaustrumConsumer, 'snapshot'>>
+  Partial<Pick<ClaustrumConsumer, 'snapshot' | 'refresh'>>
 export interface ServingOptions {
   entry: ProviderEntry
   placeholder: string
@@ -71,6 +72,7 @@ export function servingCallbacks(
         'foreign'
       )
         return undefined
+      await waitForFirstRoster(options.consumer, signal)
       const route = orderedRoutes(options)[0]
       if (!route) throw new ClaustrumAuthError('no-vault-account')
       const limits = await options.limits?.()

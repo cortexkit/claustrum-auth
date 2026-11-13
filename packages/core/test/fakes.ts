@@ -20,6 +20,48 @@ const cleanup: (() => Promise<unknown>)[] = []
 const liveDirs = new Set<string>()
 let armed = false
 
+// A timed-out Bun test can keep executing its async body. Abort and drain
+// that body's work before the hub is disposed or the next test starts.
+export function testLifetime() {
+  const controller = new AbortController()
+  const pending = new Set<Promise<unknown>>()
+  const close = async () => {
+    controller.abort()
+    await Promise.allSettled([...pending])
+  }
+  afterThisTest(close)
+  return {
+    close,
+    signal: controller.signal,
+    async run(run: (signal: AbortSignal) => Promise<void>) {
+      const work = (async () => {
+        controller.signal.throwIfAborted()
+        await run(controller.signal)
+      })()
+      pending.add(work)
+      try {
+        await work
+      } catch (error) {
+        // Credential redaction may copy the abort error, so identity alone
+        // cannot recognize cancellation of an abandoned body.
+        if (
+          !controller.signal.aborted ||
+          !(error instanceof Error) ||
+          error.name !== 'AbortError'
+        )
+          throw error
+      } finally {
+        pending.delete(work)
+      }
+    },
+  }
+}
+
+interface HarnessOptions {
+  refresh?: boolean
+  beforeDispose?: () => Promise<unknown>
+}
+
 /**
  * Runs `close` when the current test finishes, pass or fail.
  *
@@ -75,8 +117,9 @@ export async function harness(
   host: Host = 'opencode1',
   now?: () => number,
   table = fixtureEntries,
+  options?: HarnessOptions,
 ) {
-  return withTable(rows, host, table, 'fixture-a', now)
+  return withTable(rows, host, table, 'fixture-a', now, options)
 }
 
 // The same harness over the shipped table: the hub's members and the vault
@@ -93,12 +136,36 @@ export async function liveHarness(
   )
 }
 
+// Origin isolation needs one member, not a private roster for every provider.
+// Cross-provider classification tests continue to use the full live table.
+export async function withProviderHarness(
+  rows: ScopedInventoryRow[],
+  host: Host,
+  entry: ProviderEntry,
+  run: (
+    h: Awaited<ReturnType<typeof withTable>>,
+    signal: AbortSignal,
+  ) => Promise<void>,
+) {
+  const lifetime = testLifetime()
+  await lifetime.run(async (signal) => {
+    const member = entry.hosts[host]
+    if (!member) throw new Error(`no ${entry.service} member on ${host}`)
+    const h = await withTable(rows, host, [entry], member, undefined, {
+      beforeDispose: lifetime.close,
+    })
+    signal.throwIfAborted()
+    await run(h, signal)
+  })
+}
+
 async function withTable(
   rows: ScopedInventoryRow[],
   host: Host,
   table: readonly ProviderEntry[],
   firstMember: string,
   now?: () => number,
+  options?: HarnessOptions,
 ) {
   // common-auth writes these files owner-only and refuses a parent folder that
   // other users may change. A Windows CI checkout (D:\a\...) is such a folder,
@@ -179,11 +246,13 @@ async function withTable(
     },
     table,
   )
-  afterThisTest(async () => {
+  const close = async () => {
+    await options?.beforeDispose?.()
     await core.disposeLimits()
     await core.hub.dispose()
-  })
-  await core.hub.refresh()
+  }
+  afterThisTest(close)
+  if (options?.refresh !== false) await core.hub.refresh()
   const consumer = core.consumers.get(firstMember)
   if (!consumer) throw new Error(`missing ${firstMember} member`)
   return {
@@ -191,6 +260,7 @@ async function withTable(
     reads,
     reports,
     client,
+    close,
     dir,
     // The material the fake vault serves for a row at its current version.
     secretOf: (credentialId: string) => `secret-${credentialId}-${version}`,
