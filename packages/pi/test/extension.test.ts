@@ -11,6 +11,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import { setTestEnv } from '../../core/test/env.ts'
 import { harness, row } from '../../core/test/fakes.ts'
+import { fakeFirstRosterClock } from '../../core/test/first-roster-fixture.ts'
 import { installVaultHost } from '../../core/test/host.ts'
 import { installRoutingAccessor } from '../../core/test/routing-accessor-fixture.ts'
 import { routing } from '../../core/test/routing-fixtures.ts'
@@ -186,8 +187,17 @@ test('Pi startup refusal names model registration and the remedy without echoing
 async function servedTurn(options: {
   withdraw?: (core: ReturnType<typeof createTestCore>) => void
   hosted?: 'missing' | 'relay'
+  gateList?: () => Promise<void>
+  duringTurn?: (finished: Promise<void>) => Promise<void>
 }) {
   const h = await harness(options.hosted ? [row('a')] : [])
+  if (options.gateList) {
+    const list = h.client.listScoped.bind(h.client)
+    h.client.listScoped = async (...args) => {
+      await options.gateList?.()
+      return list(...args)
+    }
+  }
   const relay = options.hosted
     ? installVaultHost(options.hosted === 'relay' ? h.client : undefined)
     : undefined
@@ -275,29 +285,40 @@ async function servedTurn(options: {
   let sends = 0
   let message = ''
   const authorizations: string[] = []
-  for await (const event of stream(
-    {
-      provider: servedProvider,
-      id: 'm',
-      api: 'openai-completions',
-      baseUrl: 'https://fixture.invalid/v1',
-      input: ['text'],
-      output: ['text'],
-    },
-    { messages: [] },
-    {
-      apiKey: placeholderKey(servedProvider),
-      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-        sends++
-        authorizations.push(
-          new Request(input, init).headers.get('authorization') ?? '',
-        )
-        return new Response('not a stream')
+  const turn = (async () => {
+    for await (const event of stream(
+      {
+        provider: servedProvider,
+        id: 'm',
+        api: 'openai-completions',
+        baseUrl: 'https://fixture.invalid/v1',
+        input: ['text'],
+        output: ['text'],
       },
-    },
-  ))
-    message = event.error?.errorMessage ?? message
-  if (options.hosted) {
+      { messages: [] },
+      {
+        apiKey: placeholderKey(servedProvider),
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          sends++
+          authorizations.push(
+            new Request(input, init).headers.get('authorization') ?? '',
+          )
+          return new Response('not a stream')
+        },
+      },
+    ))
+      message = event.error?.errorMessage ?? message
+  })()
+  try {
+    await options.duringTurn?.(turn)
+  } catch (error) {
+    await turn
+    await handlers.session_shutdown?.({}, context)
+    throw error
+  }
+  await turn
+  // The gated fixture measures the first request, not the menu's refresh.
+  if (options.hosted && !options.gateList) {
     await commandHandler?.('', context)
     expect(notices.at(-1)).toContain('Served by Thalamus')
     expect(notices.at(-1)).not.toMatch(/\bConnect\b|\bDisconnect\b/)
@@ -343,6 +364,37 @@ test('hosted Pi serves the relay vault key without enrollment or native connect'
   expect(sends).toBe(1)
   expect(authorizations).toEqual(['Bearer secret-a-1'])
   expect(relay?.calls).toEqual(['claustrum-auth'])
+})
+
+test('Pi first request waits for a slow first roster without delaying startup', async () => {
+  const clock = fakeFirstRosterClock()
+  const gate = Promise.withResolvers<void>()
+  let lists = 0
+  try {
+    const { sends, authorizations } = await servedTurn({
+      hosted: 'relay',
+      gateList: async () => {
+        lists++
+        await gate.promise
+      },
+      async duringTurn(finished) {
+        try {
+          await Promise.race([clock.scheduled, finished])
+          expect(clock.pending()).toBe(1)
+          clock.advance(1_999)
+          gate.resolve()
+        } finally {
+          gate.resolve()
+        }
+      },
+    })
+    expect(sends).toBe(1)
+    expect(authorizations).toEqual(['Bearer secret-a-1'])
+    expect(lists).toBe(1)
+    expect(clock.pending()).toBe(0)
+  } finally {
+    gate.resolve()
+  }
 })
 
 test('Pi without a session manager stops an API-key request only under routing', async () => {

@@ -10,14 +10,19 @@ import { hostEnvironment, shadowedVariable } from './effective.js'
 import { refusalMessage, shadowedMessage } from './messages.js'
 import { placeholderFor } from './placeholder.js'
 
+// Shared internally with the core, without adding a public error code. Only
+// an exhausted first-roster deadline suppresses the on-demand discovery.
+const firstRosterTimeout = Symbol.for('claustrum-auth:first-roster-timeout')
+
 // A local refusal the user sees as the request's error. Its message is one of
 // the fixed texts in messages.ts and never carries request data or a secret.
 export class ClaustrumRefusal extends Error {
   constructor(
     readonly code: string,
     message: string,
+    cause?: unknown,
   ) {
-    super(message)
+    super(message, { cause })
     this.name = 'ClaustrumRefusal'
   }
 }
@@ -128,6 +133,7 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
           code === 'credential-shadowed' && shadowed
             ? shadowedMessage(options.provider, shadowed, options.platform)
             : refusalMessage(code, options.provider),
+          error.cause,
         )
       }
       const kind = vaultFailure(error)
@@ -143,6 +149,7 @@ export function providerFetch(options: ProviderFetchOptions): CoreFetch {
       if (
         !(error instanceof ClaustrumRefusal) ||
         error.code !== 'no-vault-account' ||
+        error.cause === firstRosterTimeout ||
         !options.discover
       )
         throw error

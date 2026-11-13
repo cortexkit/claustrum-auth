@@ -93,9 +93,6 @@ interface Served {
   lastError?: string
 }
 
-// How long an owned request waits for the vault's first account list.
-const firstDiscoveryWaitMs = 2_000
-
 /** The api_key Pi keeps in a provider's slot while the vault serves it. */
 export const placeholderKey = (provider: string) =>
   `cortexkit-claustrum-auth-v1-${provider}`
@@ -409,13 +406,8 @@ class PiRuntime {
         const authority = await this.#authority()
         if (authority !== 'vault' && authority !== 'host')
           throw new ClaustrumAuthError('vault-mode-off')
-        // A request sent right after Pi starts waits briefly for the first
-        // account list instead of being refused for having none yet.
-        if (!this.routable(served))
-          await Promise.race([
-            this.#firstDiscovery,
-            new Promise((resolve) => setTimeout(resolve, firstDiscoveryWaitMs)),
-          ])
+        // The core owns the bounded, abort-aware first-roster wait, so Pi
+        // must not spend a second request-path deadline before entering it.
         return await serve(input, init)
       } catch (error) {
         const code = refusalCode(error)
