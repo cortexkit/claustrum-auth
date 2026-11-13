@@ -172,6 +172,15 @@ async function turn(
   }
 }
 
+function servedReport(provider = 'deepseek') {
+  return {
+    account_id: 'account-1',
+    credential_id: `apikey:${provider}`,
+    outcome: 'served',
+    headers: {},
+  }
+}
+
 for (const provider of ['deepseek', 'cerebras'] as const) {
   test(`Pi ${provider} bills provider-true usage once with Pi's final responseId`, async () => {
     const { reports, sessions } = captureBilling()
@@ -191,6 +200,7 @@ for (const provider of ['deepseek', 'cerebras'] as const) {
     expect(parsed).toBeGreaterThan(0)
     expect(message.responseId).toBe('reply-1')
     expect(reports).toEqual([
+      servedReport(provider),
       {
         kind: 'billing',
         attempt_id: expect.any(String),
@@ -249,21 +259,28 @@ test('Pi reroute bills both physical sends with different UUIDs and attempts', a
     account_id: `account-${++choices}`,
   }))
   await turn('deepseek', false, true)
-  expect(reports).toHaveLength(2)
+  expect(reports).toHaveLength(3)
+  expect(reports[1]).toEqual({
+    ...servedReport(),
+    account_id: 'account-2',
+    credential_id: 'apikey:deepseek:second',
+  })
+  const billing = reports.filter((report) => report.kind === 'billing')
   expect(
-    reports.map((report) => [report.attempt, report.status, report.outcome]),
+    billing.map((report) => [report.attempt, report.status, report.outcome]),
   ).toEqual([
     [1, 429, 'failed'],
     [2, 200, 'completed'],
   ])
-  expect(reports[0]?.attempt_id).not.toBe(reports[1]?.attempt_id)
+  expect(billing[0]?.attempt_id).not.toBe(billing[1]?.attempt_id)
 })
 
-test('Pi followed same-origin redirect reports only the completed model call', async () => {
+test('Pi followed same-origin redirect bills only the completed model call', async () => {
   const { reports } = captureBilling()
   await turn('deepseek', false, false, true)
-  expect(reports).toHaveLength(1)
-  expect(reports[0]).toMatchObject({
+  expect(reports).toHaveLength(2)
+  expect(reports[0]).toEqual(servedReport())
+  expect(reports[1]).toMatchObject({
     status: 200,
     outcome: 'completed',
     usage: expectedUsage,

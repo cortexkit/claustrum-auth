@@ -119,12 +119,60 @@ export function hasBillingAccessor(): boolean {
   }
 }
 
+// Routing-only requests use the same terminal markers as billing without
+// collecting usage or creating a billing report.
+class ResponseCompletion {
+  protected completed = false
+  protected failed = false
+
+  event(value: unknown): void {
+    if (!object(value)) return
+    if (
+      value.type === 'error' ||
+      value.type === 'response.failed' ||
+      value.error
+    )
+      this.failed = true
+    if (
+      value.type === 'response.completed' ||
+      value.type === 'response.incomplete'
+    )
+      this.completed = true
+    if (Array.isArray(value.choices)) {
+      for (const choice of value.choices) {
+        if (!object(choice)) continue
+        if (choice.finish_reason != null || object(choice.message))
+          this.completed = true
+      }
+    }
+  }
+
+  bodyEnd(ended: boolean, status: number): boolean {
+    return (
+      !this.failed && this.completed && ended && status >= 200 && status < 300
+    )
+  }
+
+  cancel(status: number): boolean {
+    // Hosts may stop reading at the protocol terminal marker without reading
+    // byte EOF. Cancellation before that marker is still a cut response.
+    return this.bodyEnd(this.completed, status)
+  }
+
+  json(value: unknown): void {
+    this.event(value)
+    if (object(value) && !value.error) this.completed = true
+  }
+
+  done(): void {
+    this.completed = true
+  }
+}
+
 /** One receipt and one UUID for one physical send, including redirects and retries. */
-export class BillingAttempt {
+export class BillingAttempt extends ResponseCompletion {
   private readonly attemptId = randomUUID()
   private reported = false
-  private completed = false
-  private failed = false
   private outputStarted = false
   private responseId?: string
   private rawUsage?: BillingUsage
@@ -141,33 +189,23 @@ export class BillingAttempt {
     private readonly receipt: ClaustrumScopedAttempt,
     private readonly attempt?: number,
     private readonly pi = false,
-  ) {}
+  ) {
+    super()
+  }
 
   event(value: unknown): void {
+    super.event(value)
     if (!object(value)) return
-    if (
-      value.type === 'error' ||
-      value.type === 'response.failed' ||
-      value.error
-    )
-      this.failed = true
-    if (
-      value.type === 'response.completed' ||
-      value.type === 'response.incomplete'
-    )
-      this.completed = true
     if (typeof value.type === 'string' && value.type.endsWith('.delta'))
       this.outputStarted = true
     if (Array.isArray(value.choices)) {
       for (const choice of value.choices) {
         if (!object(choice)) continue
-        if (choice.finish_reason != null) this.completed = true
         if (
           object(choice.delta) &&
           Object.keys(choice.delta).some((key) => key !== 'role')
         )
           this.outputStarted = true
-        if (object(choice.message)) this.completed = true
       }
     }
     const response = object(value.response) ? value.response : value
@@ -183,27 +221,13 @@ export class BillingAttempt {
     }
   }
 
-  bodyEnd(ended: boolean, status: number): void {
+  bodyEnd(ended: boolean, status: number): boolean {
     this.status = status
     this.ended = ended
     // Pi's stored responseId and stop reason arrive after its driver consumes
     // the successful body. Failed sends still settle before a retry starts.
     if (!this.pi || status < 200 || status >= 300) this.end()
-  }
-
-  cancel(status: number): void {
-    // Hosts may stop reading at the protocol terminal marker without reading
-    // byte EOF. Cancellation before that marker is still a cut response.
-    this.bodyEnd(this.completed, status)
-  }
-
-  json(value: unknown): void {
-    this.event(value)
-    if (object(value) && !value.error) this.completed = true
-  }
-
-  done(): void {
-    this.completed = true
+    return super.bodyEnd(ended, status)
   }
 
   piEnd(responseId?: string, stopReason?: string): void {
@@ -272,14 +296,25 @@ export class BillingAttempt {
   }
 }
 
-/** Billing is strictly opt-in; do not even acquire a reader without an attempt. */
+/** Observe once for billing and routed completion; otherwise leave the body untouched. */
 export function observeBillingResponse(
   record: BillingAttempt | undefined,
   response: Response,
+  onCompleted?: () => void,
 ): Response {
-  if (!record) return response
+  if (!record && !onCompleted) return response
+  const observer = record ?? new ResponseCompletion()
+  let notified = false
+  const finish = (completed: boolean) => {
+    if (!completed || notified || !onCompleted) return
+    notified = true
+    // Routing is advisory; an accessor failure must never break a reply.
+    try {
+      onCompleted()
+    } catch {}
+  }
   if (!response.body) {
-    record.bodyEnd(true, response.status)
+    finish(observer.bodyEnd(true, response.status))
     return response
   }
   const sse = /^text\/event-stream(?:\s*;|$)/i.test(
@@ -292,10 +327,10 @@ export function observeBillingResponse(
     ? response.body.pipeThrough(
         watchServerSentEvents(
           (event) => {
-            if (event.data === '[DONE]') record.done()
+            if (event.data === '[DONE]') observer.done()
             else {
               try {
-                record.event(JSON.parse(event.data))
+                observer.event(JSON.parse(event.data))
               } catch {}
             }
           },
@@ -313,10 +348,10 @@ export function observeBillingResponse(
             if (next.done) {
               if (!sse && !oversized) {
                 try {
-                  record.json(JSON.parse(json + decoder.decode()))
+                  observer.json(JSON.parse(json + decoder.decode()))
                 } catch {}
               }
-              record.bodyEnd(true, response.status)
+              finish(observer.bodyEnd(true, response.status))
               controller.close()
             } else {
               if (!sse && !oversized) {
@@ -330,12 +365,12 @@ export function observeBillingResponse(
               controller.enqueue(next.value)
             }
           } catch (error) {
-            record.bodyEnd(false, response.status)
+            observer.bodyEnd(false, response.status)
             controller.error(error)
           }
         },
         cancel(reason) {
-          record.cancel(response.status)
+          finish(observer.cancel(response.status))
           return reader.cancel(reason)
         },
       },

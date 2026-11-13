@@ -99,3 +99,30 @@ export async function reportRoutedBalance(
     providerCode,
   })
 }
+
+export function routedCompletion(
+  key: RoutedKey | undefined,
+  sessionId: string | undefined,
+  response: Response,
+): (() => void) | undefined {
+  if (!key || !sessionId || !response.ok) return undefined
+  const headers: Record<string, string> = {}
+  response.headers.forEach((value, name) => {
+    const lower = name.toLowerCase()
+    if (
+      lower.startsWith('x-ratelimit-') ||
+      lower.startsWith('ratelimit') ||
+      lower.startsWith('anthropic-ratelimit-') ||
+      lower === 'retry-after'
+    )
+      headers[lower] = value
+  })
+  return () =>
+    reportRouting({
+      sessionId,
+      accountId: key.accountId,
+      credentialId: key.credentialId,
+      outcome: 'served',
+      headers,
+    })
+}

@@ -20,7 +20,11 @@ import {
   redactError,
   redactResponse,
 } from './placement.js'
-import { reportRoutedBalance, selectRoutedKey } from './routing.js'
+import {
+  reportRoutedBalance,
+  routedCompletion,
+  selectRoutedKey,
+} from './routing.js'
 import { placeReceipt, type ServingOptions } from './serving.js'
 
 export const maxBodyBytes = 64 * 1024 * 1024
@@ -311,7 +315,11 @@ export function createFetch(options: FetchOptions): CoreFetch {
                 return reply
               }
               billing = options.billing?.(receipt)
-              return observeBillingResponse(billing, reply)
+              return observeBillingResponse(
+                billing,
+                reply,
+                routedCompletion(routed, options.routing?.sessionId, reply),
+              )
             } catch (error) {
               const failedBilling = billing ?? options.billing?.(receipt)
               failedBilling?.end(false, false)

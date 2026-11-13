@@ -15,6 +15,15 @@ import { installRoutingAccessor } from '../../../core/test/routing-accessor-fixt
 import { vaultMethodId } from '../../src/v2/setup.ts'
 import { scope, startServer, trigger } from './fakes.ts'
 
+function servedReport(provider = 'deepseek') {
+  return {
+    account_id: 'account-1',
+    credential_id: `apikey:${provider}`,
+    outcome: 'served',
+    headers: {},
+  }
+}
+
 async function setup(provider: string, tableEntry?: ProviderEntry) {
   const entry =
     tableEntry ?? supportedProviders.find((row) => row.service === provider)
@@ -81,6 +90,7 @@ for (const provider of ['deepseek', 'cerebras'] as const) {
           warming: { on: false, stop_reason: 'unsupported' },
         },
       },
+      servedReport(provider),
     ])
     expect(sessions.every((session) => session === run.scoped.sessionID)).toBe(
       true,
@@ -88,7 +98,7 @@ for (const provider of ['deepseek', 'cerebras'] as const) {
   })
 }
 
-test('a reply model alias keeps one report at the sent model without usageByModel', async () => {
+test('a reply model alias keeps one billing report at the sent model without usageByModel', async () => {
   const { reports } = captureBilling()
   const run = await setup('deepseek')
   await run.send()
@@ -102,13 +112,14 @@ test('a reply model alias keeps one report at the sent model without usageByMode
     { headers: { 'content-type': 'text/event-stream' } },
   )
   await (await run.response(response)).text()
-  expect(reports).toHaveLength(1)
+  expect(reports).toHaveLength(2)
   expect(reports[0]).toMatchObject({
     model: 'sent-model',
     usage: expectedUsage,
   })
   expect(reports[0]).not.toHaveProperty('usage_by_model')
   expect(reports[0]).not.toHaveProperty('usageByModel')
+  expect(reports[1]).toEqual(servedReport())
 })
 
 test('without an accessor a served host request never looks up billing semantics', async () => {
@@ -236,10 +247,11 @@ for (const withUsage of [true, false]) {
     }
     await reader?.cancel()
     expect(cancelled).toBe(true)
-    expect(reports).toHaveLength(1)
+    expect(reports).toHaveLength(2)
     expect(reports[0]).toMatchObject({ outcome: 'completed', status: 200 })
     if (withUsage) expect(reports[0]?.usage).toEqual(expectedUsage)
     else expect(reports[0]).not.toHaveProperty('usage')
+    expect(reports[1]).toEqual(servedReport())
   })
 }
 
@@ -256,13 +268,15 @@ test('a retry reports each physical send with a fresh attemptId', async () => {
   })
   await run.send()
   await (await run.response(chatResponse('deepseek'))).text()
-  expect(reports).toHaveLength(2)
+  expect(reports).toHaveLength(3)
   expect(reports.map((report) => report.outcome)).toEqual([
     'failed',
     'completed',
+    'served',
   ])
   expect(reports[1]?.attempt).toBe(2)
   expect(reports[0]?.attempt_id).not.toBe(reports[1]?.attempt_id)
+  expect(reports[2]).toEqual(servedReport())
 })
 
 test('xAI WebSocket reports the completed Responses frame once', async () => {

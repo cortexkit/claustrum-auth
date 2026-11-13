@@ -110,6 +110,13 @@ so it was not sent." No answer stops it with "Thalamus routing did not answer,
 so this API key request was not sent." Slow routing (over 1.5 seconds) counts
 as no answer and stops the API-key request too. Documented empty-balance
 refusals are reported back to routing; user-set spending caps are not.
+Each completed 2xx reply on a routing-chosen API key also reports `served`
+for that vault credential. The plugin uses the same completion markers as
+billing, including a host stopping its read after a terminal marker. Cut
+replies and non-2xx replies do not report `served`. Only headers beginning
+with `x-ratelimit-`, `ratelimit` or `anthropic-ratelimit-`, plus `retry-after`,
+are included, with their values unchanged. Providers without those headers
+send an empty header object.
 Outside Thalamus, without its accessor, account selection is unchanged.
 
 Subscription (OAuth) rows are not routed yet. If the plugin's usual next row

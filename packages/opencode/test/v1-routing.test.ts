@@ -16,10 +16,10 @@ test('routing OC1 uses stamped session and routing key, strips private header, f
     env: () => ({}),
     transport: async (input, init) => {
       sent.push(new Request(input, init))
-      return new Response('ok')
+      return new Response('{"ok":true}')
     },
   })
-  const { calls } = routing(async () => ({ account_id: 'account-b' }))
+  const { calls, reports } = routing(async () => ({ account_id: 'account-b' }))
   const init = {
     method: 'POST',
     headers: {
@@ -28,7 +28,16 @@ test('routing OC1 uses stamped session and routing key, strips private header, f
     },
     body: '{"model":"requested-model"}',
   }
-  await serve('https://fixture.invalid', init)
+  const response = await serve('https://fixture.invalid', init)
+  expect(await response.json()).toEqual({ ok: true })
+  expect(reports).toEqual([
+    {
+      account_id: 'account-b',
+      credential_id: 'b',
+      outcome: 'served',
+      headers: {},
+    },
+  ])
   expect(sent.map((r) => r.headers.get('authorization'))).toEqual([
     'Bearer secret-b-1',
   ])

@@ -18,6 +18,7 @@ import {
   redactError,
   redactResponse,
   reportRoutedBalance,
+  routedCompletion,
   type ServingConsumer,
   selectRoutedKey,
   servingCallbacks,
@@ -659,6 +660,7 @@ export function createVaultAdapter(
       const rewritten = observeBillingResponse(
         attempt.data?.billing,
         await redactResponse(response, [secret]),
+        routedCompletion(attempt.data?.routed, attempt.sessionID, response),
       )
       return isLocalLimitRefusal(response)
         ? localLimitRefusal(rewritten, localLimitRetry(response))

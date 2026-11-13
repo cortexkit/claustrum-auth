@@ -65,9 +65,20 @@ test('routing OC2 OAuth-only and mixed pools preserve subscription choice until 
     }
   }
 })
-async function world(service = 'fixture-a') {
+async function world(service = 'fixture-a', subscription = false) {
   const h = await harness(
-    [row('a', { accountId: undefined }), row('b', { accountId: undefined })],
+    subscription
+      ? [
+          row('oauth', {
+            credentialType: 'oauth',
+            authMethod: 'oauth',
+            refreshAdapter: 'fixture-a',
+          }),
+        ]
+      : [
+          row('a', { accountId: undefined }),
+          row('b', { accountId: undefined }),
+        ],
     'opencode2',
   )
   const adapter = createVaultAdapter({
@@ -101,7 +112,18 @@ async function world(service = 'fixture-a') {
       accountId: choice,
       attempt,
     })
-    return { sent, attempt }
+    const respond = async (response: Response) => {
+      const rewritten = await adapter.rewriteResponse?.({
+        ...scope,
+        accountId: choice,
+        request: sent ?? request,
+        response,
+        attempt,
+      })
+      if (!rewritten) throw new Error('missing rewritten response')
+      return rewritten
+    }
+    return { sent, attempt, respond }
   }
   return { h, adapter, send }
 }
@@ -204,5 +226,166 @@ test('routing OC2 balance reports once and never for auth rate limits or self-se
           ]
         : [],
     )
+  }
+})
+
+test('routing OC2 completed routed replies report served once with only rate-limit headers', async () => {
+  const { send } = await world()
+  const { reports } = routing(async () => ({ account_id: 'b' }))
+  const { respond } = await send()
+  const original = new Response(
+    'data: {"choices":[{"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    {
+      headers: {
+        'content-type': 'text/event-stream',
+        'X-RateLimit-Remaining': '001',
+        'RateLimit-Reset': '42',
+        'Anthropic-RateLimit-Tokens-Limit': '1000',
+        'Retry-After': '3',
+        authorization: 'must-not-report',
+        'set-cookie': 'must-not-report',
+        'x-request-id': 'must-not-report',
+      },
+    },
+  )
+  const response = await respond(original)
+  expect(reports).toEqual([])
+  await response.text()
+  expect(
+    reports.filter(
+      (report) => (report as { outcome: string }).outcome === 'served',
+    ),
+  ).toEqual([
+    {
+      account_id: 'b',
+      credential_id: 'b',
+      outcome: 'served',
+      headers: {
+        'x-ratelimit-remaining': '001',
+        'ratelimit-reset': '42',
+        'anthropic-ratelimit-tokens-limit': '1000',
+        'retry-after': '3',
+      },
+    },
+  ])
+  expect(
+    reports.filter(
+      (report) => (report as { kind?: string }).kind === 'billing',
+    ),
+  ).toHaveLength(1)
+})
+
+test('routing OC2 JSON EOF reports served with empty headers', async () => {
+  const { send } = await world()
+  const { reports } = routing(async () => ({ account_id: 'b' }))
+  const { respond } = await send()
+  const response = await respond(new Response('{"ok":true}'))
+  await response.text()
+  expect(
+    reports.filter(
+      (report) => (report as { outcome: string }).outcome === 'served',
+    ),
+  ).toEqual([
+    { account_id: 'b', credential_id: 'b', outcome: 'served', headers: {} },
+  ])
+})
+
+test('routing OC2 cuts send no served; terminal cancellation sends exactly one', async () => {
+  for (const terminal of [false, true]) {
+    const { send } = await world()
+    const { reports } = routing(async () => ({ account_id: 'b' }))
+    const { respond } = await send()
+    const original = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              terminal
+                ? 'data: [DONE]\n\n'
+                : 'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+            ),
+          )
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )
+    const response = await respond(original)
+    if (!response.body) throw new Error('missing response body')
+    const reader = response.body.getReader()
+    await reader.read()
+    expect(reports).toEqual([])
+    await reader.cancel()
+    expect(
+      reports.filter(
+        (report) => (report as { outcome: string }).outcome === 'served',
+      ),
+    ).toEqual(
+      terminal
+        ? [
+            {
+              account_id: 'b',
+              credential_id: 'b',
+              outcome: 'served',
+              headers: {},
+            },
+          ]
+        : [],
+    )
+  }
+})
+
+test('routing OC2 non-2xx replies never report served', async () => {
+  for (const status of [400, 401, 402, 403, 429, 500]) {
+    const { send, adapter } = await world('deepseek')
+    const { reports } = routing(async () => ({ account_id: 'b' }))
+    const { attempt, respond } = await send()
+    await adapter.limitFromResponse?.({
+      status,
+      headers: new Headers(),
+      body: async () => '{}',
+      attempt,
+    })
+    const response = await respond(new Response('{}', { status }))
+    await response.text()
+    expect(
+      reports.filter(
+        (report) => (report as { kind?: string }).kind !== 'billing',
+      ),
+    ).toEqual(
+      status === 402
+        ? [
+            {
+              account_id: 'b',
+              credential_id: 'b',
+              outcome: 'credential_refused',
+              provider_code: 'http_402',
+            },
+          ]
+        : [],
+    )
+  }
+})
+
+test('routing OC2 absent accessor and subscription rows add no completion observation', async () => {
+  for (const subscription of [false, true]) {
+    const { send } = await world('fixture-a', subscription)
+    const { reports, calls } = subscription
+      ? routing(async () => {
+          throw new Error('must not ask routing')
+        })
+      : { reports: [], calls: [] }
+    const { respond } = await send()
+    const original = new Response('{"ok":true}')
+    const response = await respond(original)
+    if (!subscription) {
+      expect(response.bodyUsed).toBe(false)
+    }
+    await response.text()
+    expect(calls).toEqual([])
+    expect(
+      reports.filter(
+        (report) => (report as { outcome: string }).outcome === 'served',
+      ),
+    ).toEqual([])
   }
 })

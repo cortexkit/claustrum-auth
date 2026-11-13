@@ -61,6 +61,7 @@ export type { RoutedKey } from './routing.js'
 export {
   hasVaultRoutingAccessor,
   reportRoutedBalance,
+  routedCompletion,
   routingDeclinedText,
   routingNoAnswerText,
   routingRefusalText,
