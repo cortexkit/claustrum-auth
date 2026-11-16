@@ -96,6 +96,7 @@ run_step typecheck bun run typecheck
 # Biome checks formatting as well as lint; lint also checks source portability.
 run_step lint bun run lint
 run_step ignored-cortexkit ignored_files
+run_step source-file-size bun scripts/check-source-size.mjs
 if [[ $fast == --fast ]]; then finished=1; exit 0; fi
 
 step=suite-logs

@@ -25,6 +25,8 @@ jobs:
       - run: bun run build
       - run: bun run typecheck
       - run: bun run lint
+      - name: Check source file sizes
+        run: bun scripts/check-source-size.mjs
       - name: Unit tests, including published setup preview and the vault menu
         run: bun run test
       - name: Refuse tracked ignored CortexKit files
