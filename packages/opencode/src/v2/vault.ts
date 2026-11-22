@@ -32,7 +32,6 @@ export async function productionDeps(
         connect: () =>
           connectClaustrumScopedClient({
             connectionFile: resolveClaustrumConnectionPath(),
-            projectRoot: process.cwd(),
             storagePath: paths.tokenPath,
             // The client's default logger prints transport error classes to
             // stderr, which would land in the host's terminal.

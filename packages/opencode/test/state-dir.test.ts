@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import {
@@ -12,8 +12,10 @@ import {
   utimes,
 } from 'node:fs/promises'
 import path from 'node:path'
-import { hostEnrollmentPaths } from '@cortexkit/common-auth/claustrum'
+import * as claustrum from '@cortexkit/common-auth/claustrum'
 import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
+import { setTestEnv } from '../../core/test/env.ts'
+import { harness } from '../../core/test/fakes.ts'
 import {
   opencodeConfigDir,
   opencodeStateDir,
@@ -310,7 +312,16 @@ test('the OpenCode 2 runtime shares enrollment and writes nothing under the conf
   )
   expect(await readdir(expected)).toEqual(['config-dir.json'])
   const stateDir = await opencodeStateDir(options, home)
-  const paths = hostEnrollmentPaths({ stateDir, host: 'opencode' })
+  const paths = await enrollOpenCode(stateDir)
+  expect(await runtime.authority()).toBe('vault')
+  await new ReleasedFlags(stateDir).set('fixture-a', true)
+  expect(await readFile(paths.tokenPath, 'utf8')).toContain('01'.repeat(32))
+  expect(await new ReleasedFlags(stateDir).isReleased('fixture-a')).toBe(true)
+  expect(await readdir(configDir)).toEqual([])
+})
+
+async function enrollOpenCode(stateDir: string) {
+  const paths = claustrum.hostEnrollmentPaths({ stateDir, host: 'opencode' })
   await writeJsonAtomic(paths.tokenPath, {
     token: '01'.repeat(32),
     token_generation: 1,
@@ -322,9 +333,41 @@ test('the OpenCode 2 runtime shares enrollment and writes nothing under the conf
     tokenGeneration: 1,
     updatedAt: 0,
   })
-  expect(await runtime.authority()).toBe('vault')
-  await new ReleasedFlags(stateDir).set('fixture-a', true)
-  expect(await readFile(paths.tokenPath, 'utf8')).toContain('01'.repeat(32))
-  expect(await new ReleasedFlags(stateDir).isReleased('fixture-a')).toBe(true)
-  expect(await readdir(configDir)).toEqual([])
+  return paths
+}
+
+test('OpenCode 2 connects to the vault without passing a project root', async () => {
+  const { root } = await profile()
+  const stateDir = path.join(root, 'state')
+  const env = { OPENCODE_CLAUSTRUM_AUTH_STATE_DIR: stateDir }
+  const connectionFile = path.join(root, 'subc-connection.json')
+  setTestEnv('CORTEXKIT_VAULT_HOST', undefined)
+  setTestEnv('SUBC_CONNECTION_FILE', connectionFile)
+  const deps = await productionDeps(env)
+  const paths = await enrollOpenCode(stateDir)
+  const { client } = await harness([])
+  const connect = spyOn(
+    claustrum,
+    'connectClaustrumScopedClient',
+  ).mockResolvedValue(client)
+  const { hub } = deps.createCore({
+    host: 'opencode2',
+    catalog: ['deepseek'],
+    integrations: { deepseek: 'deepseek' },
+  })
+  try {
+    await hub.refresh()
+    expect(connect.mock.calls).toEqual([
+      [
+        {
+          connectionFile,
+          storagePath: paths.tokenPath,
+          logger: expect.any(Function),
+        },
+      ],
+    ])
+  } finally {
+    await hub.dispose()
+    connect.mockRestore()
+  }
 })

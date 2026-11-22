@@ -1,8 +1,8 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { ClaustrumConsumerError } from '@cortexkit/common-auth/claustrum'
+import * as claustrum from '@cortexkit/common-auth/claustrum'
 import { openPiSlot } from '@cortexkit/common-auth/pi-slot'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import type {
@@ -120,6 +120,63 @@ test('loading the extension registers /claustrum and session hooks and touches n
 })
 
 const servedProvider = 'fixture-a'
+
+test('Pi connects to the vault without passing a project root', async () => {
+  const agent = await agentDir({ enrolled: true })
+  setTestEnv('PI_CODING_AGENT_DIR', agent.agent)
+  const connectionFile = path.join(agent.home, 'subc-connection.json')
+  setTestEnv('CORTEXKIT_VAULT_HOST', undefined)
+  setTestEnv('SUBC_CONNECTION_FILE', connectionFile)
+  const { client } = await harness([])
+  const connect = spyOn(
+    claustrum,
+    'connectClaustrumScopedClient',
+  ).mockResolvedValue(client)
+  const handlers: Record<
+    string,
+    (event: unknown, ctx: unknown) => Promise<void>
+  > = {}
+  const pi = {
+    on(name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) {
+      handlers[name] = handler
+    },
+    registerProvider() {},
+    registerCommand() {},
+  } as unknown as ExtensionAPI
+  const ctx = {
+    cwd: agent.home,
+    modelRegistry: {
+      getAll: () => [
+        { provider: servedProvider, id: 'm', api: 'openai-completions' },
+      ],
+    },
+    ui: { notify() {} },
+  } as unknown as ExtensionContext
+  let core: ReturnType<typeof createTestCore> | undefined
+  createPiExtension({
+    createCore: (options) => (core = createTestCore(options)),
+  })(pi)
+  try {
+    await handlers.session_start?.({}, ctx)
+    if (!core) throw new Error('Pi core did not start')
+    await core.hub.refresh()
+    expect(connect.mock.calls).toEqual([
+      [
+        {
+          connectionFile,
+          storagePath: claustrum.hostEnrollmentPaths({
+            stateDir: agent.state,
+            host: 'pi',
+          }).tokenPath,
+          logger: expect.any(Function),
+        },
+      ],
+    ])
+  } finally {
+    await handlers.session_shutdown?.({}, ctx)
+    connect.mockRestore()
+  }
+})
 
 test('Pi startup refusal names model registration and the remedy without echoing the host error', async () => {
   const h = await harness([])
@@ -420,7 +477,7 @@ test('a route withdrawn while a turn is served gets the plugin text, and nothing
       if (!consumer) throw new Error(`no ${servedProvider} consumer`)
       consumer.routingRows = () => [{ id: 'vault:gone', kind: 'api-key' }]
       consumer.send = async () => {
-        throw new ClaustrumConsumerError(
+        throw new claustrum.ClaustrumConsumerError(
           'route-unavailable',
           'Claustrum route is disabled, removed or changed',
         )

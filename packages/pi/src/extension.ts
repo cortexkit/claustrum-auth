@@ -681,7 +681,6 @@ async function startRuntime(
         (() =>
           connectClaustrumScopedClient({
             connectionFile: resolveClaustrumConnectionPath(),
-            projectRoot: ctx.cwd,
             storagePath: paths.tokenPath,
             logger: () => {},
           })),
