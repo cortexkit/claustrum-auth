@@ -226,6 +226,7 @@ export function createFetch(options: FetchOptions): CoreFetch {
           options.routing?.sessionId,
           new Set([...tried, ...rejected]),
           nextRoute,
+          signal,
         )
         routedAttempt = routed !== undefined
         const routedId = routed?.routeId

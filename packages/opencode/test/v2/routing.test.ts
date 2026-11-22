@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { placeholderSecret } from '@cortexkit/common-auth/opencode2'
 import { harness, row } from '../../../core/test/fakes.ts'
-import { routing } from '../../../core/test/routing-fixtures.ts'
+import {
+  capacityRouting,
+  routing,
+} from '../../../core/test/routing-fixtures.ts'
 import { fixtureEntries } from '../../../core/test-entry.ts'
 import { createVaultAdapter } from '../../src/v2/adapter.ts'
 
@@ -145,6 +148,19 @@ test('routing OC2 selection serves routing key for primary titles and compaction
   expect(calls).toHaveLength(4)
 })
 
+test('routing OC2 waits for capacity and re-asks for the same attempt', async () => {
+  const { send, h } = await world()
+  const { calls, timing } = capacityRouting('b')
+  const { sent } = await send()
+  expect(sent?.headers.get('authorization')).toBe('Bearer secret-b-1')
+  expect(h.reads).toEqual(['b'])
+  expect(calls.map(({ request }) => request.request_id)).toEqual([
+    expect.any(String),
+    calls[0]?.request.request_id,
+  ])
+  expect(timing.askedAgainAtMs).toBeGreaterThanOrEqual(timing.resetsAtMs)
+})
+
 test('routing OC2 refusal and no answer authorize and send nothing', async () => {
   const { send, h } = await world()
   for (const [answer, text] of [
@@ -182,7 +198,9 @@ test('routing OC2 retry excludes earlier keys and asks again', async () => {
   await expect(
     adapter.chooseAccount({ ...retry, excluded: [a, b] }),
   ).rejects.toThrow('did not answer')
-  expect(calls).toHaveLength(2)
+  const ids = calls.map(({ request }) => request.request_id)
+  expect(ids).toEqual([expect.any(String), expect.any(String)])
+  expect(ids[0]).not.toBe(ids[1])
 })
 
 test('routing OC2 balance reports once and never for auth rate limits or self-set caps', async () => {

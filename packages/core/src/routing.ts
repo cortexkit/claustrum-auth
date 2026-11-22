@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import {
-  askRouting,
+  askRoutingUntilCapacity,
   reportRouting,
 } from '@cortexkit/common-auth/routing-accessor'
 import { isBalanceFailure } from './balance.js'
@@ -42,6 +43,7 @@ export async function selectRoutedKey(
   sessionId: string | undefined,
   excluded: ReadonlySet<string> = new Set(),
   nextRoute?: string,
+  signal?: AbortSignal,
 ): Promise<RoutedKey | undefined> {
   if (!hasVaultRoutingAccessor()) return undefined
   const routes = consumer.routingRows()
@@ -67,13 +69,10 @@ export async function selectRoutedKey(
       credentialId: row.credentialId,
       accountId: row.accountIdentity ?? row.credentialId,
     }))
-  const answer = await askRouting({
-    sessionId,
-    provider,
-    modelId,
-    candidates,
-    refusals: true,
-  })
+  const answer = await askRoutingUntilCapacity(
+    { sessionId, provider, modelId, candidates, requestId: randomUUID() },
+    { signal },
+  )
   if (!answer) throw new ClaustrumAuthError('routing-no-answer')
   if ('refused' in answer) throw new ClaustrumAuthError('routing-declined')
   return answer.candidate

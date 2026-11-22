@@ -243,7 +243,20 @@ for (const host of ['opencode1', 'pi'] as const) {
     expect(calls).toEqual([
       {
         session: 'session',
-        request: { provider: 'fixture-a', modelId: 'model', refusals: true },
+        request: {
+          provider: 'fixture-a',
+          modelId: 'model',
+          refusals: true,
+          waits_for_capacity: true,
+          request_id: expect.any(String),
+          candidates: {
+            accounts: [
+              { account_id: 'a', credential_id: 'a' },
+              { account_id: 'b', credential_id: 'b' },
+            ],
+            view_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          },
+        },
         options: { deadlineMs: 1500 },
       },
     ])
@@ -308,7 +321,13 @@ for (const host of ['opencode1', 'pi'] as const) {
     await expect(
       serve('https://fixture.invalid', { headers: bearer }),
     ).rejects.toMatchObject({ code: 'routing-no-answer' })
-    expect(calls).toHaveLength(3)
+    const ids = calls.map(({ request }) => request.request_id)
+    expect(ids).toEqual([
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    ])
+    expect(new Set(ids).size).toBe(3)
     expect(h.reads).toEqual(['a', 'b'])
   })
 }

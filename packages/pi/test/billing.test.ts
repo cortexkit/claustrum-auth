@@ -14,7 +14,7 @@ import { setTestEnv } from '../../core/test/env.ts'
 import { vaultRowFor } from '../../core/test/fakes.ts'
 import { installVaultHost } from '../../core/test/host.ts'
 import { installRoutingAccessor } from '../../core/test/routing-accessor-fixture.ts'
-import { routing } from '../../core/test/routing-fixtures.ts'
+import { capacityRouting, routing } from '../../core/test/routing-fixtures.ts'
 import { createTestCore } from '../../core/test-entry.ts'
 import { createPiExtension, placeholderKey } from '../src/extension.ts'
 import { agentDir } from './harness.ts'
@@ -26,7 +26,11 @@ async function turn(
   redirect = false,
   onSemantics?: () => void,
   onReady?: () => void,
-  routingExpectation: { second?: boolean; refusal?: string } = {},
+  routingExpectation: {
+    second?: boolean
+    refusal?: string
+    signal?: AbortSignal
+  } = {},
 ) {
   const base = supportedProviders.find((row) => row.service === provider)
   if (!base?.billing) throw new Error('missing provider')
@@ -131,6 +135,7 @@ async function turn(
       { messages: [] },
       {
         sessionId: 'pi-session',
+        signal: routingExpectation.signal,
         apiKey: ownKey ? 'user-key' : placeholderKey(provider),
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
           requests++
@@ -158,6 +163,11 @@ async function turn(
     for await (const _event of reply) {
     }
     const message = await reply.result()
+    if (routingExpectation.signal?.aborted) {
+      expect(message.stopReason).toBe('aborted')
+      expect(requests).toBe(0)
+      return message
+    }
     if (routingExpectation.refusal) {
       expect(message.stopReason).toBe('error')
       expect(message.errorMessage).toContain(routingExpectation.refusal)
@@ -233,6 +243,27 @@ test('Pi routing selection serves the second vault key rather than roster first'
   await turn('deepseek', false, false, false, undefined, undefined, {
     second: true,
   })
+})
+
+test('Pi routing waits for capacity and re-asks for the same attempt', async () => {
+  const { calls, timing } = capacityRouting('account-2')
+  await turn('deepseek', false, false, false, undefined, undefined, {
+    second: true,
+  })
+  expect(calls.map(({ request }) => request.request_id)).toEqual([
+    expect.any(String),
+    calls[0]?.request.request_id,
+  ])
+  expect(timing.askedAgainAtMs).toBeGreaterThanOrEqual(timing.resetsAtMs)
+})
+
+test('Pi routing abort stops the capacity wait without re-asking or sending', async () => {
+  const controller = new AbortController()
+  const { calls } = capacityRouting('account-1', () => controller.abort())
+  await turn('deepseek', false, false, false, undefined, undefined, {
+    signal: controller.signal,
+  })
+  expect(calls).toHaveLength(1)
 })
 
 test('Pi routing refusal and no answer stop before the transport', async () => {

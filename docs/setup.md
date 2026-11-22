@@ -104,12 +104,15 @@ despite a successful grant.
 When Thalamus supplies its routing accessor and the plugin's next row is an
 API key, routing chooses that request's vault API key, including for titles,
 compaction and retries, from the enabled
-accounts for that provider. The plugin never substitutes its own choice. A
-routing refusal stops the request with "Thalamus routing declined this request,
-so it was not sent." No answer stops it with "Thalamus routing did not answer,
-so this API key request was not sent." Slow routing (over 1.5 seconds) counts
-as no answer and stops the API-key request too. Documented empty-balance
-refusals are reported back to routing; user-set spending caps are not.
+accounts for that provider. The plugin never substitutes its own choice. If an
+account is at its concurrency cap, the plugin waits until routing's reset time
+and asks again for the same attempt. It stops waiting if the host cancels the
+request through its abort signal. Any other routing refusal stops the request
+with "Thalamus routing declined this request, so it was not sent." No answer
+stops it with "Thalamus routing did not answer, so this API key request was not
+sent." An individual routing question taking over 1.5 seconds counts as no
+answer and stops the API-key request too. [Confirmed empty-balance refusals](troubleshooting.md#a-provider-reports-insufficient-balance)
+are reported back to routing; user-set spending caps are not.
 Each completed 2xx reply on a routing-chosen API key also reports `served`
 for that vault credential. The plugin uses the same completion markers as
 billing, including a host stopping its read after a terminal marker. Cut
