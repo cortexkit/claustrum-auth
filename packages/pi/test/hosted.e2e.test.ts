@@ -89,9 +89,6 @@ describe.skipIf(!e2e)('hosted real Pi', () => {
       readFile(path.join(agent.state, 'pi-enrollment.json')),
     ).rejects.toMatchObject({ code: 'ENOENT' })
     await pi.slash('/claustrum release fixture-a')
-    expect((await readAuth(agent.authPath))['fixture-a']).toEqual({
-      type: 'api_key',
-      key: 'seeded-user-key',
-    })
+    expect((await readAuth(agent.authPath))['fixture-a']).toBeUndefined()
   }, 120_000)
 })

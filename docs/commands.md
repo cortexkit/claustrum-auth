@@ -63,9 +63,10 @@ On OpenCode 1 and Pi:
 ```
 
 Use the host's provider id from the [provider list](../README.md#supported-providers).
-Pi asks for consent before moving an existing login aside. The ownership
-checks prevent a release from removing credentials that another owner has
-written since activation.
+Pi asks for consent before replacing an existing Pi login with the vault
+placeholder. Release removes only the placeholder and restores no login. Sign
+in again in Pi unless you have already added a new login, which release leaves
+untouched.
 
 On OpenCode 1, do not run login or logout concurrently with `use` or `release`:
 the host rewrites the whole auth file, so a login during that write can be

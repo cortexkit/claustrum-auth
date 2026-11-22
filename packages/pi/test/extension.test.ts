@@ -413,6 +413,7 @@ test('hosted Pi without a relay refuses an owned turn without falling back to a 
   expect(message).toContain(
     'the Claustrum vault has no usable account for fixture-a',
   )
+  expect(message).toContain('sign in to fixture-a again in Pi')
   expect(sends).toBe(0)
 })
 

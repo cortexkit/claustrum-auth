@@ -67,8 +67,8 @@ export const userLogins = Object.fromEntries(
   ]),
 )
 
-// Hand-formatted on purpose: release must restore these bytes exactly, not
-// an equivalent JSON value.
+// Nonstandard spacing lets the tests catch rewrites even when the values
+// Pi reads would be unchanged.
 export function userAuthText(logins: Record<string, unknown> = userLogins) {
   const lines = Object.entries(logins).map(
     ([id, entry]) => `  "${id}" :  ${JSON.stringify(entry)}`,

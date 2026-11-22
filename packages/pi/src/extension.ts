@@ -48,17 +48,16 @@ import {
 import { FlagStore } from './flags.js'
 import {
   activationRefusals,
-  conflictText,
   consentText,
   consentTitle,
   enteredText,
   enterFailedText,
   enterIncompleteText,
   exitFailedText,
-  missingStashText,
   refusalText,
   releasedText,
   releaseKeptText,
+  releaseNoPlaceholderText,
   unknownProvider,
   unsavedRosterText,
   usage,
@@ -89,19 +88,12 @@ interface Served {
   models: Model<Api>[]
   marks: Map<string, number>
   lastEnter?: 'entered' | 'failed' | 'incomplete'
-  lastExit?: 'restored' | 'conflict' | 'nothing-to-do' | 'failed'
-  lastError?: string
+  lastExit?: 'cleared' | 'nothing-to-do'
 }
 
 /** The api_key Pi keeps in a provider's slot while the vault serves it. */
 export const placeholderKey = (provider: string) =>
   `cortexkit-claustrum-auth-v1-${provider}`
-
-function errorCode(error: unknown) {
-  return error instanceof Error && 'code' in error
-    ? String((error as { code: unknown }).code)
-    : 'io'
-}
 
 // A refusal is answered with a local response rather than a thrown error, so
 // pi-ai shows its fixed text and neither the OpenAI SDK nor Pi retries it as a
@@ -247,15 +239,12 @@ class PiRuntime {
           await served.slot.enterVault()
           served.lastEnter = 'entered'
           outcome = { success: true, wrote: true }
-        } catch (error) {
-          served.lastError = errorCode(error)
-          // Keep the owned form whenever the slot was touched: a stash or a
-          // placeholder left behind must stay guarded until it is resolved.
+        } catch {
+          // Keep the owned form if the placeholder was installed or if the
+          // slot could not be read. Never let Pi send the vault placeholder.
           let wrote = true
           try {
-            const inspection = await served.slot.inspect()
-            wrote =
-              inspection.slot === 'placeholder' || inspection.stash === 'valid'
+            wrote = (await served.slot.inspect()).slot === 'placeholder'
           } catch {}
           served.lastEnter = wrote ? 'incomplete' : 'failed'
           outcome = { success: false, wrote }
@@ -266,14 +255,13 @@ class PiRuntime {
       case 'exit-slot': {
         try {
           served.lastExit = await served.slot.exitVault()
-        } catch (error) {
-          served.lastExit = 'failed'
-          served.lastError = errorCode(error)
+        } catch {
+          served.lastExit = undefined
         }
         await this.#handle(served, {
           type: 'exited',
           success:
-            served.lastExit === 'restored' ||
+            served.lastExit === 'cleared' ||
             served.lastExit === 'nothing-to-do',
         })
         return
@@ -463,12 +451,9 @@ class PiRuntime {
       const inspection = await this.queue
         .run(() => served.slot.inspect())
         .catch(() => undefined)
-      // A placeholder, or a stash whose swap or restore did not finish, makes
-      // the provider owned: it stays guarded until enter or exit resolves it.
-      const owned =
-        !inspection ||
-        inspection.slot === 'placeholder' ||
-        inspection.stash === 'valid'
+      // Guard the placeholder, including when auth.json cannot be read and
+      // we cannot tell if the slot still contains it.
+      const owned = !inspection || inspection.slot === 'placeholder'
       await this.dispatch(served, {
         type: 'start',
         listed: true,
@@ -476,24 +461,8 @@ class PiRuntime {
         vaultOn: notLocal,
       })
       if (served.state.status !== 'owned' || served.state.pending) continue
-      if (served.state.released) {
+      if (served.state.released)
         await this.dispatch(served, { type: 'release' })
-      } else if (
-        notLocal &&
-        served.state.consented &&
-        inspection?.stash === 'valid' &&
-        inspection.slot !== 'placeholder'
-      ) {
-        // pi-slot completes an interrupted swap from its stash.
-        await this.queue.run(async () => {
-          try {
-            await served.slot.enterVault()
-          } catch (error) {
-            served.lastError = errorCode(error)
-          }
-          await this.refreshRegistry()
-        })
-      }
     }
     this.#core.hub.start()
     this.#firstDiscovery = this.#core.hub.refresh().catch(() => {})
@@ -581,23 +550,17 @@ class PiRuntime {
     }
     const wasOwned = served.state.status === 'owned'
     served.lastExit = undefined
-    served.lastError = undefined
     await this.dispatch(served, { type: 'release' })
     if (served.state.status !== 'owned') {
-      ctx.ui.notify(
-        wasOwned ? releasedText(provider) : releaseKeptText(provider),
-        'info',
-      )
+      const text = !wasOwned
+        ? releaseKeptText(provider)
+        : served.lastExit === 'cleared'
+          ? releasedText(provider)
+          : releaseNoPlaceholderText(provider)
+      ctx.ui.notify(text, 'info')
       return
     }
-    ctx.ui.notify(
-      served.lastExit === 'conflict'
-        ? conflictText(provider)
-        : served.lastError === 'missing-stash'
-          ? missingStashText(provider)
-          : exitFailedText(provider),
-      'error',
-    )
+    ctx.ui.notify(exitFailedText(provider), 'error')
   }
 
   async status(ctx: ExtensionContext, args = '') {

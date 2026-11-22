@@ -267,9 +267,9 @@ Steps, per provider:
    should not list its credential. `apikey:fireworks-ai` (fleet id
    `fireworks-ai`) is served here as `fireworks`, and `apikey:kimi-for-coding`
    (fleet id `kimi-code-plan-global`) as `kimi-coding`.
-2. Run the activation command above. **Pass:** Pi asks for consent to move the
-   existing login aside (when there is one), you accept, and the provider is
-   reported as owned.
+2. Run the activation command above. **Pass:** Pi asks for consent to delete the
+   existing login (when there is one), you accept, and the provider is reported
+   as owned.
 3. Choose a model of that provider and send one short prompt. **Pass:** a
    normal answer arrives. The owned form offers only the models of the one
    bearer api the plugin registers and hides the rest; the count is in
@@ -279,8 +279,8 @@ Steps, per provider:
    example `gpt-5.4-mini`).
 4. Run `/claustrum` again. **Pass:** the provider line says owned with one
    vault account.
-5. Run `/claustrum release <provider>`. **Pass:** your own Pi login is back and
-   a prompt with it answers.
+5. Run `/claustrum release <provider>`. **Pass:** the provider has no Pi login.
+   Sign in again in Pi and check that a prompt answers with the new login.
 
 ## Batch 2 checks, on every host that lists the provider
 

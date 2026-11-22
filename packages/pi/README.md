@@ -10,7 +10,7 @@ Quit Pi, then run:
 npx @cortexkit/opencode-claustrum-auth setup --host pi
 ```
 
-Approve enrollment and grant access in `ck auth`, then activate a provider with `/claustrum use <provider>` inside Pi. Pi asks for consent before moving an existing login aside.
+Approve enrollment and grant access in `ck auth`, then activate a provider with `/claustrum use <provider>` inside Pi. Pi asks for consent before replacing an existing login with the vault placeholder. `/claustrum release <provider>` removes the placeholder without restoring the old login; sign in again in Pi to use your own login.
 
 ## Documentation
 

@@ -8,12 +8,14 @@ import {
   enrollmentAuthority,
   hostEnrollmentPaths,
 } from '@cortexkit/common-auth/claustrum'
+import { writeJsonAtomic } from '@cortexkit/common-auth/fs'
 import { fixtureEntries } from '../../core/test-entry.ts'
 import { setupIO, setupTestBuild } from '../../opencode/test/setup-harness.ts'
 import {
   anyFileContains,
   e2e,
   placeholderOf,
+  readAuth,
   row,
   secretOf,
   unenroll,
@@ -123,7 +125,7 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     },
   )
 
-  test('class A owned: only the vault key reaches the wire, and release restores the login byte for byte', async () => {
+  test('class A owned: only the vault key reaches the wire, and release requires a new Pi login', async () => {
     const original = userAuthText()
     const { mock, vault, agent, launch } = await world({
       rows: [row('a1', 'fixture-a')],
@@ -133,9 +135,11 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(await pi.slash('/claustrum use fixture-a')).toContain(
       'fixture-a now uses keys from the Claustrum vault',
     )
-    // Consent is asked before the login moves, and names what happens.
     expect(pi.confirms).toHaveLength(1)
-    expect(pi.confirms[0]?.message).toContain('moved aside')
+    expect(pi.confirms[0]?.message).toContain('deletes your existing Pi login')
+    expect(pi.confirms[0]?.message).toContain(
+      'Sign in to fixture-a again in Pi',
+    )
     expect(await slotKey(agent.authPath, 'fixture-a')).toBe(
       placeholderOf('fixture-a'),
     )
@@ -147,13 +151,23 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(JSON.stringify(mock.seen)).not.toContain(placeholderOf('fixture-a'))
     expect(vault.reads).toEqual(['a1'])
     expect(await pi.slash('/claustrum release fixture-a')).toContain(
-      'your own Pi login is back',
+      'Sign in to fixture-a again in Pi',
     )
-    expect(await readFile(agent.authPath, 'utf8')).toBe(original)
-    expect(await pi.turn('fixture-a', 'ok')).toMatchObject({
+    const released = await readAuth(agent.authPath)
+    expect(released['fixture-a']).toBeUndefined()
+    await pi.stop()
+    await writeJsonAtomic(agent.authPath, {
+      ...released,
+      'fixture-a': { type: 'api_key', key: 'new-pi-login' },
+    })
+    const signedIn = await launch()
+    expect(await signedIn.turn('fixture-a', 'ok')).toMatchObject({
       text: 'served-ok',
     })
-    expect(authorizations(mock.seen).at(-1)).toBe('Bearer user-key-fixture-a')
+    expect(authorizations(mock.seen)).toEqual([
+      bearerOf('a1'),
+      'Bearer new-pi-login',
+    ])
     expect(vault.reads).toEqual(['a1'])
   })
 
@@ -170,7 +184,7 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(vault.reports).toEqual([])
   })
 
-  test('vault mode switched off exits the slot and restores the original login', async () => {
+  test('vault mode switched off removes the placeholder without restoring the original login', async () => {
     const original = userAuthText()
     const { agent, launch } = await world({
       rows: [row('a1', 'fixture-a')],
@@ -182,7 +196,7 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     await waitForPlaceholder(agent.authPath, 'fixture-a')
     await unenroll(agent.agent)
     await until(
-      async () => (await readFile(agent.authPath, 'utf8')) === original,
+      async () => (await slotKey(agent.authPath, 'fixture-a')) === undefined,
     )
     expect(await pi.slash('/claustrum')).toContain('fixture-a: available')
     expect(anyFileContains(agent.home, secretOf('a1'))).toEqual([])
@@ -341,8 +355,8 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(vault.reads).toEqual([])
   })
 
-  test('fixture-c owned hides its anthropic-messages model, and release offers it again', async () => {
-    const { launch } = await world({ rows: [row('c1', 'fixture-c')] })
+  test('fixture-c owned hides its anthropic-messages model, and both models return after a new Pi login', async () => {
+    const { agent, launch } = await world({ rows: [row('c1', 'fixture-c')] })
     const pi = await launch()
     const before = await pi.models()
     expect(before).toContain('fixture-c/c-chat')
@@ -356,7 +370,15 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(owned).not.toContain('fixture-c/c-messages')
     expect(await pi.slash('/claustrum')).toContain('1 model(s) hidden')
     await pi.slash('/claustrum release fixture-c')
-    expect(await pi.models()).toEqual(before)
+    expect(await pi.models()).not.toContain('fixture-c/c-chat')
+    const released = await readAuth(agent.authPath)
+    expect(released['fixture-c']).toBeUndefined()
+    await pi.stop()
+    await writeJsonAtomic(agent.authPath, {
+      ...released,
+      'fixture-c': { type: 'api_key', key: 'new-pi-login' },
+    })
+    expect(await (await launch()).models()).toEqual(before)
   })
 
   test("class B: the path carries the served receipt's account, and a receipt without one is refused after its one read", async () => {
@@ -469,7 +491,7 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     const first = await launch()
     await waitForPlaceholder(agent.authPath, 'fixture-a')
     await first.slash('/claustrum release fixture-a')
-    expect(await readFile(agent.authPath, 'utf8')).toBe(original)
+    expect((await readAuth(agent.authPath))['fixture-a']).toBeUndefined()
     await first.stop()
     const second = await launch()
     // Discovery finds the row routable, which would enter a consented,
@@ -483,7 +505,7 @@ describe.skipIf(!e2e)('Pi extension on the real host', () => {
     expect(await second.slash('/claustrum')).toContain(
       'fixture-a: available, 1 vault account(s), released',
     )
-    expect(await readFile(agent.authPath, 'utf8')).toBe(original)
+    expect((await readAuth(agent.authPath))['fixture-a']).toBeUndefined()
   })
 
   test('rows vanish while owned: requests refuse locally, nothing is sent and the slot is kept', async () => {

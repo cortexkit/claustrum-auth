@@ -151,11 +151,11 @@ with another host process.
 
 On Pi, declining the consent prompt reports:
 
-> Your Pi login for deepseek was not moved. Nothing changed.
+> Your Pi login for deepseek was not removed. Nothing changed.
 
-Run `/claustrum use deepseek` again only if you want the plugin to move that
-login aside. `/claustrum release deepseek` restores the saved login when the
-ownership checks permit it.
+Run `/claustrum use deepseek` again only if you want the vault to replace that
+login. `/claustrum release deepseek` removes the vault placeholder without
+restoring a login. Sign in again in Pi unless you have already set a new login.
 
 ## Account reordering is refused
 

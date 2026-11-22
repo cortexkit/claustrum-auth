@@ -112,7 +112,8 @@ OpenCode 1 and 2 share the enrollment and one state folder outside OpenCode's wa
 
 The extension registers each served provider in Pi (`packages/pi/src/extension.ts`). Outside vault mode, Pi's own login for a provider keeps serving it, and a provider the plugin held is handed back.
 
-- **Entering:** in vault mode, a provider the vault serves is taken over automatically, after the user consents once per provider. common-auth's Pi slot moves Pi's own login for it aside and stores a placeholder API key, restored byte-for-byte on release.
+- **Entering:** in vault mode, a provider the vault serves is taken over automatically, after the user consents once per provider. common-auth's Pi slot replaces any existing Pi login with a non-secret placeholder API key, without keeping a copy. Connecting or releasing deletes any legacy stash without reading it.
+- **Leaving:** release and leaving vault mode clear only the placeholder. No login is restored; the user signs in again in Pi unless a new login is already present.
 - **Models:** an owned registration replaces the provider's model list with the models of its one bearer API (`openai-completions` or `openai-responses`), exactly as Pi composed them; models of any other API would send the placeholder somewhere the plugin can't serve. To restore Pi's own list, the extension unregisters and registers again, because Pi merges a re-registration over the previous one.
 - **Serving:** only the plugin's own placeholder is owned; a user's key goes to pi-ai as Pi resolved it. Refusals are answered with a local response, so neither the OpenAI SDK nor Pi retries them as connection failures.
 - One queue runs every slot change, registration and registry refresh in the process, so providers never contend for Pi's `auth.json` lock.

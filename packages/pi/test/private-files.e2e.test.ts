@@ -47,8 +47,8 @@ function tree(dir: string): { files: string[]; folders: string[] } {
 /**
  * Enroll a clean Pi profile through setup, activate fixture-a, reorder its
  * accounts and serve one request, so the token, the enrollment state, the
- * activation flags, the login stash and the vault roster have all been
- * written. Pi is stopped before returning, so nothing is mid-write.
+ * activation flags and vault roster have all been written. Pi is stopped
+ * before returning, so nothing is mid-write.
  */
 async function enrolledProfile() {
   const { mock, vault, agent, launch } = await world({
@@ -97,16 +97,16 @@ async function enrolledProfile() {
   const names = files.map((file) =>
     path.relative(agent.state, file).replaceAll('\\', '/'),
   )
-  // The token, its ceremony state, the activation flags, the stashed login
-  // and the vault roster the reorder wrote.
+  // The token, its ceremony state, the activation flags and vault roster
+  // are private; no copy of the replaced Pi login is kept.
   expect(names).toEqual(
     expect.arrayContaining([
       path.basename(paths.tokenPath),
       path.basename(paths.statePath),
       'pi-activation.json',
-      'pi-slots/fixture-a.json',
     ]),
   )
+  expect(existsSync(path.join(agent.state, 'pi-slots'))).toBe(false)
   expect(
     names.some((name) => /^rosters\/pi\/[^/]+\/fixture-a\.json$/u.test(name)),
   ).toBe(true)

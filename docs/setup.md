@@ -86,10 +86,11 @@ For example, Kimi Code is `kimi-code-plan-global` on OpenCode and
 `kimi-coding` on Pi. Serving a turn requires a model in the host's catalog and
 the plugin's provider and request checks to pass.
 
-Pi asks for consent before moving an existing login aside. Activation and
-release preserve the host's ownership safeguards; they are not commands to
-overwrite another plugin's credentials. See [commands](commands.md) and
-[troubleshooting](troubleshooting.md) for ownership refusals.
+Pi asks for consent before replacing any existing Pi login for that provider
+with a vault placeholder. No copy is kept. After `/claustrum release <provider>`,
+sign in again in Pi to use your own login. Release never overwrites a login
+added while the vault was connected. See [commands](commands.md) and
+[troubleshooting](troubleshooting.md).
 
 ## Check the result
 

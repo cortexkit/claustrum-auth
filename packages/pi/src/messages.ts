@@ -8,6 +8,8 @@ import {
 // the plugin's own table, never anything taken from a request or a vault reply.
 const refused = 'Request refused locally by the claustrum-auth plugin:'
 const nothingSent = 'Nothing was sent.'
+const releaseAndSignIn = (provider: string) =>
+  `run ${command} release ${provider} and sign in to ${provider} again in Pi`
 
 export function refusalText(
   code: string,
@@ -22,13 +24,13 @@ export function refusalText(
     case 'origin-refused':
       return `${refused} the vault key for ${provider} is only sent to ${entry.origins.join(', ')}, and this request goes elsewhere (check a baseUrl override for this model). ${nothingSent}`
     case 'no-vault-account':
-      return `${refused} the Claustrum vault has no usable account for ${provider}. Your own Pi login for ${provider} stays moved aside while the plugin owns it; add an account in the vault, or run ${command} release ${provider}. ${nothingSent}`
+      return `${refused} the Claustrum vault has no usable account for ${provider}. Add an account in the vault, or ${releaseAndSignIn(provider)}. ${nothingSent}`
     case 'route-gone':
-      return `${refused} the Claustrum vault no longer serves this account for ${provider}; it was disabled, removed or changed after the plugin read it. Your own Pi login for ${provider} stays moved aside while the plugin owns it; check the vault's accounts and run ${command} use ${provider} again to pick them up, or run ${command} release ${provider}. ${nothingSent}`
+      return `${refused} the Claustrum vault no longer serves this account for ${provider}; it was disabled, removed or changed after the plugin read it. Check the vault's accounts and run ${command} use ${provider} again to pick them up, or ${releaseAndSignIn(provider)}. ${nothingSent}`
     case 'vault-mode-off':
-      return `${refused} Pi is not connected to the Claustrum vault, but your Pi login for ${provider} is still moved aside. Reconnect Pi to the vault, or run ${command} release ${provider}. ${nothingSent}`
+      return `${refused} Pi is not connected to the Claustrum vault, but the vault placeholder for ${provider} is still set. Reconnect Pi to the vault, or ${releaseAndSignIn(provider)}. ${nothingSent}`
     case 'vault-unreachable':
-      return `${refused} the Claustrum vault could not be reached and no key for ${provider} was read earlier in this session. Start the vault, or run ${command} release ${provider}. ${nothingSent}`
+      return `${refused} the Claustrum vault could not be reached and no key for ${provider} was read earlier in this session. Start the vault, or ${releaseAndSignIn(provider)}. ${nothingSent}`
     case 'body-too-large':
       return `${refused} the request body is larger than the 64 MiB the plugin buffers for account failover. ${nothingSent}`
     case 'redirect-limit':
@@ -37,7 +39,7 @@ export function refusalText(
     case 'account-path-invalid':
       return `${refused} the vault key for ${provider} names no account the request path can carry. ${nothingSent}`
     case 'vault-refused':
-      return `${refused} the Claustrum vault did not serve a key for ${provider}. Check its accounts in the vault, or run ${command} release ${provider}. ${nothingSent}`
+      return `${refused} the Claustrum vault did not serve a key for ${provider}. Check its accounts in the vault, or ${releaseAndSignIn(provider)}. ${nothingSent}`
     default:
       return `${refused} the Claustrum vault did not serve a key for ${provider} (${code}). ${nothingSent}`
   }
@@ -51,7 +53,7 @@ export function consentText(provider: string, hidden: number): string {
     hidden > 0
       ? ` While it does, ${hidden} ${provider} model${hidden === 1 ? '' : 's'} that send their key outside the Authorization header ${hidden === 1 ? 'is' : 'are'} hidden.`
       : ''
-  return `Your own Pi login for ${provider} (or its absence) is moved aside and restored byte for byte by ${command} release ${provider}. Requests for ${provider} then use keys from the vault.${models}`
+  return `Connecting deletes your existing Pi login for ${provider}, if any. Requests for ${provider} then use keys from the vault. Sign in to ${provider} again in Pi after running ${command} release ${provider}.${models}`
 }
 
 export const activationRefusals: Record<string, (provider: string) => string> =
@@ -61,7 +63,7 @@ export const activationRefusals: Record<string, (provider: string) => string> =
     'vault-mode-off': () =>
       'Pi is not connected to the Claustrum vault. Run the claustrum-auth setup first. Nothing changed.',
     'consent-required': (provider) =>
-      `Your Pi login for ${provider} was not moved. Nothing changed.`,
+      `Your Pi login for ${provider} was not removed. Nothing changed.`,
   }
 
 export const unknownProvider = (provider: string) =>
@@ -75,25 +77,22 @@ export const unsavedRosterText = (provider: string, cause: string) =>
 export const usage = `Usage: ${command} use <provider> | ${command} release <provider>`
 
 export const enteredText = (provider: string) =>
-  `${provider} now uses keys from the Claustrum vault. Your own login is kept aside until ${command} release ${provider}.`
+  `${provider} now uses keys from the Claustrum vault. To use your own login, ${releaseAndSignIn(provider)}.`
 
 export const enterFailedText = (provider: string) =>
-  `Pi could not move the ${provider} login aside, so ${provider} keeps using it.`
+  `Pi could not replace the ${provider} login. The vault did not take over.`
 
 export const enterIncompleteText = (provider: string) =>
-  `Moving the ${provider} login aside did not finish. ${provider} refuses requests until ${command} release ${provider} or a restart completes it.`
+  `Pi could not finish connecting ${provider} to the vault. Run ${command} release ${provider} to clear the placeholder before trying again.`
 
 export const releasedText = (provider: string) =>
-  `${provider} is released: your own Pi login is back, and the vault will not take ${provider} over again until ${command} use ${provider}.`
+  `${provider} is released. Sign in to ${provider} again in Pi. The vault will not take ${provider} over again until ${command} use ${provider}.`
 
 export const releaseKeptText = (provider: string) =>
   `${provider} is released and will not be taken over again until ${command} use ${provider}.`
 
-export const conflictText = (provider: string) =>
-  `A Pi login for ${provider} was added while the vault served it. Both that login and your original are kept, and nothing was overwritten; ${provider} stays with the vault until you remove one of them from auth.json and run ${command} release ${provider} again.`
-
-export const missingStashText = (provider: string) =>
-  `The saved copy of your ${provider} login is missing, so it cannot be restored. ${provider} keeps refusing requests; log in to ${provider} again with Pi's login command.`
+export const releaseNoPlaceholderText = (provider: string) =>
+  `${releaseKeptText(provider)} No vault placeholder was present, so the Pi slot was left unchanged. Sign in with Pi again if needed.`
 
 export const exitFailedText = (provider: string) =>
-  `Pi could not restore the ${provider} login (another Pi may be holding auth.json). ${provider} stays with the vault; try ${command} release ${provider} again.`
+  `Pi could not clear the vault placeholder for ${provider} (another Pi may be holding auth.json). Try ${command} release ${provider} again before signing in to Pi.`
