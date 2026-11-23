@@ -12,9 +12,9 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@cortexkit/claustrum-client": "^0.18.0",
-    "@cortexkit/common-auth": "^0.47.0",
+    "@cortexkit/claustrum-client": "^0.22.0",
+    "@cortexkit/common-auth": "^0.57.0",
     "@cortexkit/private-files": "^0.2.2",
-    "@cortexkit/subc-client": "^0.24.0"
+    "@cortexkit/subc-client": "^0.26.8"
   }
 }
