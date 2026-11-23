@@ -173,6 +173,14 @@ describe.skipIf(!enabled)(`OpenCode 1 real host (${process.platform})`, () => {
       )
       // The first turn also generates a title. Each physical send must read
       // the same owned credential, rather than reusing a token across sends.
+      // OpenCode 1 sends the title request alongside the turn and doesn't
+      // wait for it, so it can arrive after the turn has finished.
+      const titleDeadline = Date.now() + 10_000
+      while (
+        !mock.requests.some((request) => request.title) &&
+        Date.now() < titleDeadline
+      )
+        await Bun.sleep(50)
       expect(mock.requests.filter((request) => request.title)).toHaveLength(1)
       expect((await gets(p)).map((entry) => entry.credentialId)).toEqual(
         mock.requests.map(() => 'apikey:cerebras'),
