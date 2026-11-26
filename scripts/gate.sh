@@ -50,11 +50,6 @@ run_step() {
   printf '\n== %s ==\n' "$step"
   "$@"
 }
-ignored_files() {
-  local tracked
-  tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
-  test -z "$tracked" || { printf '%s\n' "$tracked"; return 1; }
-}
 
 if [[ $fast != --fast ]]; then
   step=toolchain
@@ -95,7 +90,7 @@ run_step build bun run build
 run_step typecheck bun run typecheck
 # Biome checks formatting as well as lint; lint also checks source portability.
 run_step lint bun run lint
-run_step ignored-cortexkit ignored_files
+run_step cortexkit-layout scripts/check-cortexkit-layout.sh
 run_step source-file-size bun scripts/check-source-size.mjs
 if [[ $fast == --fast ]]; then finished=1; exit 0; fi
 

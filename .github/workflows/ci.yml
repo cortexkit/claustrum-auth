@@ -29,11 +29,9 @@ jobs:
         run: bun scripts/check-source-size.mjs
       - name: Unit tests, including published setup preview and the vault menu
         run: bun run test
-      - name: Refuse tracked ignored CortexKit files
+      - name: Check tracked CortexKit files
         shell: bash
-        run: |
-          tracked=$(git ls-files -ci --exclude-standard -- .cortexkit)
-          test -z "$tracked" || { printf '%s\n' "$tracked"; exit 1; }
+        run: scripts/check-cortexkit-layout.sh
 
   setup-menu:
     strategy:
