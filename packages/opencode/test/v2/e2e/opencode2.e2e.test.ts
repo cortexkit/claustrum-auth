@@ -58,7 +58,7 @@ import {
 
 const ENABLED = process.env.CLAUSTRUM_AUTH_OPENCODE2_E2E === '1'
 const REUSE_CLI_DIR = process.env.CLAUSTRUM_AUTH_OPENCODE2_E2E_CLI_DIR
-export const OPENCODE_CLI_VERSION = '2.4.1'
+export const OPENCODE_CLI_VERSION = '2.4.2'
 const PASSWORD = 'claustrum-auth-e2e-loopback-only'
 const METHOD = 'claustrum-auth'
 
